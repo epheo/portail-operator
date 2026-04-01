@@ -58,3 +58,14 @@ jobs:
             BUNDLE_IMG=ghcr.io/${{ github.repository }}-bundle:${{ steps.version.outputs.VERSION }} \
             VERSION=${{ steps.version.outputs.VERSION }} \
             CONTAINER_TOOL=docker
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build and push console plugin image
+        run: |
+          make console-plugin-image-build console-plugin-image-push \
+            CONSOLE_PLUGIN_IMG=ghcr.io/${{ github.repository }}-console-plugin:${{ steps.version.outputs.VERSION }} \
+            CONTAINER_TOOL=docker

@@ -1,0 +1,49 @@
+{
+  "name": "portail-console-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "webpack --mode=production",
+    "dev": "webpack serve --mode=development",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@openshift-console/dynamic-plugin-sdk": "~4.21.0",
+    "@openshift-console/dynamic-plugin-sdk-webpack": "~4.21.0",
+    "@patternfly/react-core": "^6.3.0",
+    "@patternfly/react-icons": "^6.3.0",
+    "@patternfly/react-topology": "^6.3.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "css-loader": "^7.1.0",
+    "eslint": "^8.57.0",
+    "eslint-plugin-react": "^7.34.0",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "style-loader": "^4.0.0",
+    "ts-loader": "^9.5.0",
+    "typescript": "^5.7.0",
+    "webpack": "^5.98.0",
+    "webpack-cli": "^6.0.0",
+    "webpack-dev-server": "^5.2.0"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0",
+    "react-router-dom": "^6.0.0"
+  },
+  "consolePlugin": {
+    "name": "portail-console-plugin",
+    "version": "0.1.0",
+    "displayName": "Portail Network Topology",
+    "description": "Network topology visualization for the Portail Gateway API controller",
+    "exposedModules": {
+      "TopologyPage": "./src/components/topology/TopologyPage"
+    },
+    "dependencies": {
+      "@console/pluginAPI": "*"
+    }
+  }
+}

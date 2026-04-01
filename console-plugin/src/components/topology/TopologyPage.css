@@ -1,0 +1,272 @@
+/* ============================================================
+   Portail Topology — Console Plugin Styles
+   ============================================================ */
+
+/* --- Page layout ----------------------------------------------- */
+
+/*
+ * No PF <Page> wrapper — the OpenShift console provides the outer chrome.
+ * This div is the direct child of the console's plugin container.
+ */
+.portail-topology-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: var(--pf-v6-global--spacer--md, 16px);
+  gap: var(--pf-v6-global--spacer--md, 16px);
+}
+
+.portail-topology-page--centered {
+  align-items: center;
+  justify-content: center;
+}
+
+/* The topology surface fills all remaining space */
+.portail-topology-surface {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Ensure PF topology internals fill the surface */
+.portail-topology-surface .pf-topology-container,
+.portail-topology-surface .pf-topology-content,
+.portail-topology-surface .pf-v6-c-drawer,
+.portail-topology-surface .pf-v6-c-drawer__content,
+.portail-topology-surface .pf-v6-c-drawer__main {
+  height: 100% !important;
+}
+
+.portail-topology-surface > * {
+  height: 100%;
+}
+
+/* --- Page header ----------------------------------------------- */
+
+.portail-page-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.portail-page-subtitle {
+  color: var(--pf-v6-global--Color--200, #6a6e73);
+  font-size: var(--pf-v6-global--FontSize--sm, 0.875rem);
+  margin: 0;
+}
+
+/* --- Zone groups ----------------------------------------------- */
+
+.portail-zone-external .pf-topology__group__background {
+  fill: rgba(0, 102, 204, 0.06);
+  stroke: rgba(0, 102, 204, 0.25);
+  stroke-width: 1.5;
+  rx: 12;
+}
+
+.portail-zone-cluster .pf-topology__group__background {
+  fill: rgba(62, 134, 53, 0.06);
+  stroke: rgba(62, 134, 53, 0.25);
+  stroke-width: 1.5;
+  rx: 12;
+}
+
+/* Zone labels */
+.portail-zone-external .pf-topology-default-group__label text {
+  fill: #0066cc;
+  font-weight: 600;
+}
+
+.portail-zone-cluster .pf-topology-default-group__label text {
+  fill: #3e8635;
+  font-weight: 600;
+}
+
+/* --- Node styling ---------------------------------------------- */
+
+/* Subtle shadow on all nodes */
+.pf-topology__node__background {
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.12));
+}
+
+/* Hover lift */
+.pf-topology__node:hover .pf-topology__node__background {
+  filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.18));
+  transition: filter 0.15s ease;
+}
+
+/* Selection ring */
+.pf-topology__node.pf-m-selected .pf-topology__node__background {
+  stroke: var(--pf-v6-global--active-color--100, #0066cc);
+  stroke-width: 2.5;
+}
+
+/* --- Edge styling ---------------------------------------------- */
+
+.portail-edge-programmed .pf-topology__edge__link {
+  stroke: #3e8635;
+}
+
+.portail-edge-accepted .pf-topology__edge__link {
+  stroke: #f0ab00;
+}
+
+.portail-edge-error .pf-topology__edge__link {
+  stroke: #c9190b;
+}
+
+/* Edge hover */
+.pf-topology__edge:hover .pf-topology__edge__link {
+  stroke-width: 3;
+  transition: stroke-width 0.15s ease;
+}
+
+/* Edge tag (protocol/port) */
+.pf-topology__edge__tag-text {
+  font-size: 11px;
+  font-weight: 500;
+}
+
+/* --- Legend ---------------------------------------------------- */
+
+.portail-legend {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 8px 16px;
+  background: var(--pf-v6-global--BackgroundColor--100, #fff);
+  border-top: 1px solid var(--pf-v6-global--BorderColor--100, #d2d2d2);
+  font-size: var(--pf-v6-global--FontSize--sm, 0.875rem);
+  color: var(--pf-v6-global--Color--200, #6a6e73);
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.portail-legend__section {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.portail-legend__section-title {
+  font-weight: 600;
+  color: var(--pf-v6-global--Color--100, #151515);
+  margin-right: 4px;
+}
+
+.portail-legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.portail-legend__swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+
+.portail-legend__line {
+  display: inline-block;
+  width: 24px;
+  height: 2px;
+  vertical-align: middle;
+}
+
+.portail-legend__line--dashed {
+  background: repeating-linear-gradient(
+    to right,
+    #6a6e73 0,
+    #6a6e73 5px,
+    transparent 5px,
+    transparent 9px
+  );
+}
+
+.portail-legend__line--dotted {
+  background: repeating-linear-gradient(
+    to right,
+    #6a6e73 0,
+    #6a6e73 2px,
+    transparent 2px,
+    transparent 6px
+  );
+}
+
+/* --- Toolbar --------------------------------------------------- */
+
+.portail-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.portail-namespace-chip {
+  font-size: var(--pf-v6-global--FontSize--sm, 0.875rem);
+}
+
+/* --- Control bar position -------------------------------------- */
+
+.pf-v6-c-topology-control-bar {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  z-index: 10;
+}
+
+/* --- Empty state ------------------------------------------------ */
+
+.portail-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+  text-align: center;
+  gap: 16px;
+}
+
+.portail-empty-state__icon {
+  font-size: 3rem;
+  color: var(--pf-v6-global--Color--200, #6a6e73);
+}
+
+/* --- Side panel ------------------------------------------------ */
+
+/* TopologySideBar handles theming natively — no forced background */
+
+/* --- Dark theme fixes ------------------------------------------ */
+
+/* FormSelect options: prevent white-on-white text in dark themes */
+.pf-v6-c-form-control select,
+.pf-v6-c-form-control select option,
+.pf-v6-c-menu__list-item,
+.pf-v6-c-select__menu-item {
+  color: inherit;
+  background-color: inherit;
+}
+
+/* Ensure select dropdown text inherits the theme text color */
+.pf-v6-theme-dark .pf-v6-c-form-control select option,
+.pf-v6-theme-dark .pf-v6-c-menu__list-item {
+  color: var(--pf-v6-global--Color--100);
+  background-color: var(--pf-v6-global--BackgroundColor--200);
+}
+
+/* Native <select> and <option> elements in dark mode */
+.pf-v6-theme-dark select,
+.pf-v6-theme-dark select option {
+  color: var(--pf-v6-global--Color--100, #e0e0e0);
+  background-color: var(--pf-v6-global--BackgroundColor--200, #1b1d21);
+}
+
+/* Also handle the OpenShift console dark theme class */
+.os-dark-theme select,
+.os-dark-theme select option,
+[data-theme="dark"] select,
+[data-theme="dark"] select option {
+  color: #e0e0e0;
+  background-color: #1b1d21;
+}

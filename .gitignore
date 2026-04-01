@@ -31,3 +31,7 @@ go.work
 
 # operator-sdk generates bundle.Dockerfile; we use bundle.Containerfile
 bundle.Dockerfile
+
+# Console plugin
+console-plugin/node_modules/
+console-plugin/dist/

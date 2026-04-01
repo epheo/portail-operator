@@ -165,6 +165,40 @@ bundle-build: ## Build the OLM bundle image.
 bundle-push: ## Push the OLM bundle image.
 	$(CONTAINER_TOOL) push $(BUNDLE_IMG)
 
+##@ Console Plugin
+
+CONSOLE_PLUGIN_IMG ?= quay.io/epheo/portail-console-plugin:latest
+
+
+.PHONY: console-plugin-install
+console-plugin-install: ## Install console plugin dependencies.
+	cd console-plugin && npm install
+
+.PHONY: console-plugin-build
+console-plugin-build: console-plugin-install ## Build the console plugin.
+	cd console-plugin && npm run build
+
+.PHONY: console-plugin-lint
+console-plugin-lint: console-plugin-install ## Lint the console plugin.
+	cd console-plugin && npm run lint && npm run typecheck
+
+.PHONY: console-plugin-image-build
+console-plugin-image-build: ## Build the console plugin container image.
+	$(CONTAINER_TOOL) build -t $(CONSOLE_PLUGIN_IMG) -f console-plugin/Containerfile console-plugin/
+
+.PHONY: console-plugin-image-push
+console-plugin-image-push: ## Push the console plugin container image.
+	$(CONTAINER_TOOL) push $(CONSOLE_PLUGIN_IMG)
+
+.PHONY: console-plugin-deploy
+console-plugin-deploy: kustomize ## Deploy the console plugin to the cluster.
+	cd console-plugin/deploy && "$(KUSTOMIZE)" edit set image portail-console-plugin=$(CONSOLE_PLUGIN_IMG)
+	"$(KUSTOMIZE)" build console-plugin/deploy | "$(KUBECTL)" apply -f -
+
+.PHONY: console-plugin-undeploy
+console-plugin-undeploy: kustomize ## Remove the console plugin from the cluster.
+	"$(KUSTOMIZE)" build console-plugin/deploy | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -
+
 ##@ Deployment
 
 ifndef ignore-not-found

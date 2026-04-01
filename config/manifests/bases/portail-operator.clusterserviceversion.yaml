@@ -24,6 +24,7 @@ metadata:
         }
       ]
     capabilities: Basic Install
+    console.openshift.io/plugins: '["portail-console-plugin"]'
   name: portail-operator.v0.0.0
   namespace: placeholder
 spec:

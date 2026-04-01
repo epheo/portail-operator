@@ -28,6 +28,9 @@ resources:
 #- ../prometheus
 # [METRICS] Expose the controller manager metrics service.
 - metrics_service.yaml
+# [CONSOLE PLUGIN] Deploy the OpenShift console plugin for network topology visualization.
+# Uncomment to include the console plugin when deploying.
+#- ../../console-plugin/deploy
 # [NETWORK POLICY] Protect the /metrics endpoint and Webhook Server with NetworkPolicy.
 # Only Pod(s) running a namespace labeled with 'metrics: enabled' will be able to gather the metrics.
 # Only CR(s) which requires webhooks and are applied on namespaces labeled with 'webhooks: enabled' will
