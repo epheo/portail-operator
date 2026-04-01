@@ -1,0 +1,13 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dataplane-binding
+  labels:
+    app.kubernetes.io/name: portail
+    app.kubernetes.io/managed-by: portail-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dataplane-role
+subjects: []

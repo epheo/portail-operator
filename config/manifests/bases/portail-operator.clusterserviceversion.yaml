@@ -1,0 +1,89 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  annotations:
+    alm-examples: |-
+      [
+        {
+          "apiVersion": "gateway.networking.k8s.io/v1",
+          "kind": "Gateway",
+          "metadata": {
+            "name": "example-gateway",
+            "namespace": "default"
+          },
+          "spec": {
+            "gatewayClassName": "portail",
+            "listeners": [
+              {
+                "name": "http",
+                "port": 80,
+                "protocol": "HTTP"
+              }
+            ]
+          }
+        }
+      ]
+    capabilities: Basic Install
+  name: portail-operator.v0.0.0
+  namespace: placeholder
+spec:
+  apiservicedefinitions: {}
+  customresourcedefinitions: {}
+  description: |-
+    Portail Operator watches Kubernetes Gateway API resources and automatically
+    manages the lifecycle of Portail data plane Deployments and LoadBalancer Services.
+
+    When a Gateway resource is created, the operator provisions a Portail Deployment
+    and Service with ports derived from the Gateway listeners. When the Gateway is
+    deleted, owned resources are garbage collected via owner references.
+
+    The operator is fully decoupled from the Portail data plane — they communicate
+    only through Kubernetes resources.
+
+    ### Prerequisites
+    - Gateway API CRDs (gateway.networking.k8s.io/v1)
+
+    **OpenShift**: Gateway API standard channel CRDs are pre-installed. TCPRoute, UDPRoute,
+    and TLSRoute require the experimental channel, which is managed by the Ingress Operator.
+
+    **Kubernetes**: Install the experimental channel for full protocol support:
+    `kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.1/experimental-install.yaml`
+
+    A default GatewayClass named "portail" is created automatically on install.
+  displayName: Portail
+  icon:
+  - base64data: ""
+    mediatype: image/png
+  install:
+    spec:
+      deployments: null
+    strategy: deployment
+  installModes:
+  - supported: true
+    type: OwnNamespace
+  - supported: true
+    type: SingleNamespace
+  - supported: false
+    type: MultiNamespace
+  - supported: true
+    type: AllNamespaces
+  keywords:
+  - gateway-api
+  - networking
+  - load-balancer
+  - proxy
+  - ingress
+  links:
+  - name: Portail
+    url: https://github.com/epheo/portail
+  - name: Portail Operator
+    url: https://github.com/epheo/portail-operator
+  maintainers:
+  - email: epheo@pm.me
+    name: epheo
+  maturity: alpha
+  minKubeVersion: 1.28.0
+  provider:
+    name: epheo
+    url: https://portail.epheo.eu
+  version: 0.0.0

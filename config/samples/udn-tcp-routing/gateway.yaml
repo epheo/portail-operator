@@ -1,0 +1,16 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: tcp-routing-gateway
+  namespace: default
+spec:
+  gatewayClassName: portail
+  listeners:
+  - name: tcp-8080
+    protocol: HTTP
+    port: 8080
+  addresses:
+  - type: portail.epheo.eu/Network
+    value: udn-frontend
+  - type: portail.epheo.eu/Network
+    value: udn-backend

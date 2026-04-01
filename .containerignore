@@ -1,0 +1,12 @@
+# More info: https://docs.podman.io/en/latest/markdown/podman-build.1.html#containerignore
+# Ignore everything by default and re-include only needed files
+*
+
+# Re-include Go source and module files
+!cmd/
+!internal/
+!go.mod
+!go.sum
+
+# Re-include OLM bundle for bundle image builds
+!bundle/

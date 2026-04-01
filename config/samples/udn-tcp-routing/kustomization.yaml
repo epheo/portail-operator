@@ -1,0 +1,4 @@
+resources:
+- gateway-class.yaml
+- udn.yaml
+- gateway.yaml
