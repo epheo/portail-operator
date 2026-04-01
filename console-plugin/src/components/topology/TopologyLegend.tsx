@@ -10,10 +10,6 @@ export const TopologyLegend: React.FC = () => {
           Default
         </span>
         <span className="portail-legend__item">
-          <span className="portail-legend__swatch" style={{ background: '#3e8635' }} />
-          NAD
-        </span>
-        <span className="portail-legend__item">
           <span className="portail-legend__swatch" style={{ background: '#6753ac' }} />
           UDN
         </span>
@@ -44,6 +40,22 @@ export const TopologyLegend: React.FC = () => {
         <span className="portail-legend__item">
           <span className="portail-legend__swatch" style={{ background: '#009596' }} />
           HTTPRoute
+        </span>
+        <span className="portail-legend__item">
+          <span className="portail-legend__swatch" style={{ background: '#8476D1' }} />
+          GRPCRoute
+        </span>
+        <span className="portail-legend__item">
+          <span className="portail-legend__swatch" style={{ background: '#C46100' }} />
+          TCPRoute
+        </span>
+        <span className="portail-legend__item">
+          <span className="portail-legend__swatch" style={{ background: '#EC7A08' }} />
+          TLSRoute
+        </span>
+        <span className="portail-legend__item">
+          <span className="portail-legend__swatch" style={{ background: '#A18FFF' }} />
+          UDPRoute
         </span>
       </div>
     </div>

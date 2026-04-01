@@ -13,6 +13,22 @@ type RouteNodeProps = {
 } & WithSelectionProps &
   WithDragNodeProps;
 
+function routeBadgeConfig(routeType: string): { badge: string; color: string } {
+  switch (routeType) {
+    case 'grpc':
+      return { badge: 'gRPC', color: '#8476D1' };
+    case 'tcp':
+      return { badge: 'TCP', color: '#C46100' };
+    case 'tls':
+      return { badge: 'TLS', color: '#EC7A08' };
+    case 'udp':
+      return { badge: 'UDP', color: '#A18FFF' };
+    case 'http':
+    default:
+      return { badge: 'HTTP', color: '#009596' };
+  }
+}
+
 const RouteNodeComponent: React.FC<RouteNodeProps> = ({
   element,
   ...rest
@@ -21,21 +37,22 @@ const RouteNodeComponent: React.FC<RouteNodeProps> = ({
   const hostLabel = data?.hostnames?.length
     ? data.hostnames[0]
     : '';
+  const { badge, color } = routeBadgeConfig(data?.routeType ?? 'http');
 
   return (
     <DefaultNode
       element={element}
       showStatusDecorator
-      statusDecoratorTooltip={`HTTPRoute: ${hostLabel || element.getLabel()}`}
-      badge="HTTP"
-      badgeColor="#009596"
+      statusDecoratorTooltip={`${badge}Route: ${hostLabel || element.getLabel()}`}
+      badge={badge}
+      badgeColor={color}
       {...rest}
     >
       <g transform={`translate(25, 25)`}>
         <RouteIcon
           style={{
             fontSize: '24px',
-            color: '#009596',
+            color,
           }}
         />
       </g>

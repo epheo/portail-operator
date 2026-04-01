@@ -5,6 +5,7 @@ import {
   EXTERNAL_NODE_ID,
   CLUSTER_DEFAULT_NODE_ID,
 } from '../constants';
+import { K8sResourceCommon } from '@openshift-console/dynamic-plugin-sdk';
 import {
   GraphModel,
   TopologyNode,
@@ -14,6 +15,11 @@ import {
   NetworkAttachmentDefinitionResource,
   UserDefinedNetworkResource,
   HTTPRouteResource,
+  GRPCRouteResource,
+  TCPRouteResource,
+  TLSRouteResource,
+  UDPRouteResource,
+  HTTPRouteParentRef,
   ListenerInfo,
   GatewayCondition,
   RouteNodeData,
@@ -76,12 +82,26 @@ function findNetworkNodeId(
   return udnMap.get(networkName) ?? nadMap.get(networkName);
 }
 
+/** Minimal shape shared by all xRoute resources for graph processing. */
+interface GenericRoute {
+  metadata?: { name?: string; namespace?: string };
+  spec: {
+    parentRefs?: HTTPRouteParentRef[];
+    hostnames?: string[];
+    rules?: Array<{ backendRefs?: Array<unknown> }>;
+  };
+}
+
 export const useTopologyGraph = (
   gateways: GatewayResource[],
   gatewayClasses: GatewayClassResource[],
   nads: NetworkAttachmentDefinitionResource[],
   udns: UserDefinedNetworkResource[],
   httpRoutes: HTTPRouteResource[],
+  grpcRoutes: GRPCRouteResource[],
+  tcpRoutes: TCPRouteResource[],
+  tlsRoutes: TLSRouteResource[],
+  udpRoutes: UDPRouteResource[],
 ): GraphModel => {
   return useMemo(() => {
     // Find GatewayClasses managed by Portail
@@ -237,69 +257,76 @@ export const useTopologyGraph = (
       }
     }
 
-    // Build HTTPRoute nodes and edges
-    for (const route of httpRoutes) {
-      const routeName = route.metadata?.name ?? 'unknown';
-      const routeNamespace = route.metadata?.namespace ?? 'default';
-      const parentRefs = route.spec.parentRefs ?? [];
+    // Generic route processor for all xRoute types
+    const processRoutes = (
+      routes: GenericRoute[],
+      routeType: RouteNodeData['routeType'],
+    ) => {
+      for (const route of routes) {
+        const routeName = route.metadata?.name ?? 'unknown';
+        const routeNamespace = route.metadata?.namespace ?? 'default';
+        const parentRefs = route.spec.parentRefs ?? [];
 
-      for (const parentRef of parentRefs) {
-        // Only process Gateway parentRefs (default kind is Gateway)
-        const refKind = parentRef.kind ?? 'Gateway';
-        if (refKind !== 'Gateway') continue;
+        for (const parentRef of parentRefs) {
+          const refKind = parentRef.kind ?? 'Gateway';
+          if (refKind !== 'Gateway') continue;
 
-        const refNamespace = parentRef.namespace ?? routeNamespace;
-        const gwKey = `${refNamespace}/${parentRef.name}`;
-        const gatewayEdgeId = gatewayEdgeMap.get(gwKey);
+          const refNamespace = parentRef.namespace ?? routeNamespace;
+          const gwKey = `${refNamespace}/${parentRef.name}`;
+          const gatewayEdgeId = gatewayEdgeMap.get(gwKey);
+          if (!gatewayEdgeId) continue;
 
-        if (!gatewayEdgeId) continue; // Not a managed gateway
+          const gwEdge = edges.find((e) => e.id === gatewayEdgeId);
+          if (!gwEdge) continue;
 
-        // Find the target node of the gateway edge to place route near it
-        const gwEdge = edges.find((e) => e.id === gatewayEdgeId);
-        if (!gwEdge) continue;
+          const routeNodeId = `route/${routeType}/${routeNamespace}/${routeName}`;
+          const rules = route.spec.rules ?? [];
+          const backendCount = rules.reduce(
+            (acc, r) => acc + (r.backendRefs?.length ?? 0), 0,
+          );
 
-        const routeNodeId = `route/${routeNamespace}/${routeName}`;
-        const backendCount = (route.spec.rules ?? []).reduce(
-          (acc, r) => acc + (r.backendRefs?.length ?? 0), 0,
-        );
+          if (!nodes.find((n) => n.id === routeNodeId)) {
+            const routeData: RouteNodeData = {
+              routeType,
+              hostnames: route.spec.hostnames ?? [],
+              rulesCount: rules.length,
+              backendCount,
+              parentGatewayEdgeId: gatewayEdgeId,
+              namespace: routeNamespace,
+              resource: route as K8sResourceCommon,
+            };
 
-        // Only add the route node once (avoid duplicates for multiple parentRefs)
-        if (!nodes.find((n) => n.id === routeNodeId)) {
-          const routeData: RouteNodeData = {
-            routeType: 'http',
-            hostnames: route.spec.hostnames ?? [],
-            rulesCount: route.spec.rules?.length ?? 0,
-            backendCount,
-            parentGatewayEdgeId: gatewayEdgeId,
-            namespace: routeNamespace,
-            resource: route,
-          };
+            nodes.push({
+              id: routeNodeId,
+              type: 'route',
+              label: routeName,
+              zone: 'cluster',
+              data: routeData,
+            });
+          }
 
-          nodes.push({
-            id: routeNodeId,
+          edges.push({
+            id: `route-edge/${routeType}/${routeNamespace}/${routeName}/${parentRef.name}`,
             type: 'route',
+            source: gwEdge.target,
+            target: routeNodeId,
             label: routeName,
-            zone: 'cluster',
-            data: routeData,
+            data: {
+              routeName,
+              routeNamespace,
+              parentGateway: parentRef.name,
+            },
           });
         }
-
-        // Create edge from the gateway's target node to the route node
-        edges.push({
-          id: `route-edge/${routeNamespace}/${routeName}/${parentRef.name}`,
-          type: 'route',
-          source: gwEdge.target,
-          target: routeNodeId,
-          label: routeName,
-          data: {
-            routeName,
-            routeNamespace,
-            parentGateway: parentRef.name,
-          },
-        });
       }
-    }
+    };
+
+    processRoutes(httpRoutes, 'http');
+    processRoutes(grpcRoutes, 'grpc');
+    processRoutes(tcpRoutes, 'tcp');
+    processRoutes(tlsRoutes, 'tls');
+    processRoutes(udpRoutes, 'udp');
 
     return { nodes, edges };
-  }, [gateways, gatewayClasses, nads, udns, httpRoutes]);
+  }, [gateways, gatewayClasses, nads, udns, httpRoutes, grpcRoutes, tcpRoutes, tlsRoutes, udpRoutes]);
 };

@@ -12,7 +12,7 @@ export interface NetworkNodeData {
 }
 
 export interface RouteNodeData {
-  routeType: 'http';
+  routeType: 'http' | 'grpc' | 'tcp' | 'tls' | 'udp';
   hostnames: string[];
   rulesCount: number;
   backendCount: number;
@@ -164,4 +164,65 @@ export interface HTTPRouteResource extends K8sResourceCommon {
     }>;
   };
 }
+
+export interface GRPCRouteMethodMatch {
+  type?: 'Exact' | 'RegularExpression';
+  service?: string;
+  method?: string;
+}
+
+export interface GRPCRouteRule {
+  matches?: Array<{
+    method?: GRPCRouteMethodMatch;
+    headers?: Array<{ type?: string; name: string; value: string }>;
+  }>;
+  backendRefs?: HTTPRouteBackendRef[];
+}
+
+export interface GRPCRouteResource extends K8sResourceCommon {
+  spec: {
+    parentRefs?: HTTPRouteParentRef[];
+    hostnames?: string[];
+    rules?: GRPCRouteRule[];
+  };
+  status?: {
+    parents?: Array<{
+      parentRef: { name: string; namespace?: string };
+      conditions?: GatewayCondition[];
+    }>;
+  };
+}
+
+export interface TCPRouteRule {
+  backendRefs?: HTTPRouteBackendRef[];
+}
+
+export interface TCPRouteResource extends K8sResourceCommon {
+  spec: {
+    parentRefs?: HTTPRouteParentRef[];
+    rules?: TCPRouteRule[];
+  };
+  status?: {
+    parents?: Array<{
+      parentRef: { name: string; namespace?: string };
+      conditions?: GatewayCondition[];
+    }>;
+  };
+}
+
+export interface TLSRouteResource extends K8sResourceCommon {
+  spec: {
+    parentRefs?: HTTPRouteParentRef[];
+    hostnames?: string[];
+    rules?: TCPRouteRule[]; // TLSRoute rules have same shape: only backendRefs
+  };
+  status?: {
+    parents?: Array<{
+      parentRef: { name: string; namespace?: string };
+      conditions?: GatewayCondition[];
+    }>;
+  };
+}
+
+export type UDPRouteResource = TCPRouteResource; // Same shape: parentRefs + rules with backendRefs only
 

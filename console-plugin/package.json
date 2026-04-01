@@ -31,8 +31,7 @@
   },
   "peerDependencies": {
     "react": "^18.0.0",
-    "react-dom": "^18.0.0",
-    "react-router-dom": "^6.0.0"
+    "react-dom": "^18.0.0"
   },
   "consolePlugin": {
     "name": "portail-console-plugin",
@@ -40,7 +39,8 @@
     "displayName": "Portail Network Topology",
     "description": "Network topology visualization for the Portail Gateway API controller",
     "exposedModules": {
-      "TopologyPage": "./src/components/topology/TopologyPage"
+      "TopologyPage": "./src/components/topology/TopologyPage",
+      "TopologyRedirect": "./src/components/topology/TopologyRedirect"
     },
     "dependencies": {
       "@console/pluginAPI": "*"

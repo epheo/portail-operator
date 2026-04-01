@@ -3,9 +3,19 @@
     "type": "console.page/route",
     "properties": {
       "exact": true,
-      "path": "/portail-topology",
+      "path": "/portail-topology/ns/:ns",
       "component": {
         "$codeRef": "TopologyPage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "exact": true,
+      "path": "/portail-topology",
+      "component": {
+        "$codeRef": "TopologyRedirect"
       }
     }
   },
