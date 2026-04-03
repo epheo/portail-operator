@@ -1,3 +1,4 @@
 resources:
 - bases/portail-operator.clusterserviceversion.yaml
 - ../default
+- ../console-plugin

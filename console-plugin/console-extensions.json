@@ -13,6 +13,16 @@
     "type": "console.page/route",
     "properties": {
       "exact": true,
+      "path": "/portail-topology/all-namespaces",
+      "component": {
+        "$codeRef": "TopologyPage"
+      }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "exact": true,
       "path": "/portail-topology",
       "component": {
         "$codeRef": "TopologyRedirect"

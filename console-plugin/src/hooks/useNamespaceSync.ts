@@ -3,7 +3,23 @@ import { useActiveNamespace } from '@openshift-console/dynamic-plugin-sdk';
 
 const ALL_NS_SLUG = 'all-namespaces';
 const ALL_NS_VALUE = '#ALL_NS#';
-const BASE_PATH = '/portail-topology/ns/';
+const NS_PREFIX = '/portail-topology/ns/';
+const ALL_NS_PATH = '/portail-topology/all-namespaces';
+
+function getNsFromPath(): string | undefined {
+  const path = window.location.pathname;
+  if (path === ALL_NS_PATH || path === ALL_NS_PATH + '/') {
+    return ALL_NS_SLUG;
+  }
+  if (path.startsWith(NS_PREFIX)) {
+    return path.slice(NS_PREFIX.length).split('/')[0] || undefined;
+  }
+  return undefined;
+}
+
+function buildUrl(slug: string): string {
+  return slug === ALL_NS_SLUG ? ALL_NS_PATH : `${NS_PREFIX}${slug}`;
+}
 
 function nsToSlug(ns: string): string {
   return ns === ALL_NS_VALUE ? ALL_NS_SLUG : ns;
@@ -13,16 +29,8 @@ function slugToNs(slug: string): string {
   return slug === ALL_NS_SLUG ? ALL_NS_VALUE : slug;
 }
 
-function getNsFromPath(): string | undefined {
-  const path = window.location.pathname;
-  if (path.startsWith(BASE_PATH)) {
-    return path.slice(BASE_PATH.length).split('/')[0] || undefined;
-  }
-  return undefined;
-}
-
-function replaceUrl(ns: string): void {
-  const target = `${BASE_PATH}${ns}`;
+function replaceUrl(slug: string): void {
+  const target = buildUrl(slug);
   if (window.location.pathname !== target) {
     window.history.replaceState(null, '', target);
     window.dispatchEvent(new PopStateEvent('popstate'));

@@ -80,7 +80,7 @@ spec:
   - name: Portail Operator
     url: https://github.com/epheo/portail-operator
   maintainers:
-  - email: epheo@pm.me
+  - email: root@epheo.eu
     name: epheo
   maturity: alpha
   minKubeVersion: 1.28.0

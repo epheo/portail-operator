@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Console plugin resources for OLM bundle inclusion.
+# No namePrefix here — the ConsolePlugin CR references the service by exact name.
+
+resources:
+  - deployment.yaml
+  - service.yaml
+  - consoleplugin.yaml

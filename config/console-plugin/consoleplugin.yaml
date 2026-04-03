@@ -1,0 +1,13 @@
+apiVersion: console.openshift.io/v1
+kind: ConsolePlugin
+metadata:
+  name: portail-console-plugin
+spec:
+  displayName: Portail Network Topology
+  backend:
+    type: Service
+    service:
+      name: portail-console-plugin
+      namespace: portail-operator-system
+      port: 9443
+      basePath: /

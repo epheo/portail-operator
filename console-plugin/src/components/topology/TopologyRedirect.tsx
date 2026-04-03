@@ -5,9 +5,10 @@ const TopologyRedirect: React.FC = () => {
   const [activeNamespace] = useActiveNamespace();
 
   useEffect(() => {
-    const ns = activeNamespace === '#ALL_NS#' ? 'all-namespaces' : activeNamespace;
-    window.history.replaceState(null, '', `/portail-topology/ns/${ns}`);
-    // Dispatch popstate so React Router picks up the change
+    const target = activeNamespace === '#ALL_NS#'
+      ? '/portail-topology/all-namespaces'
+      : `/portail-topology/ns/${activeNamespace}`;
+    window.history.replaceState(null, '', target);
     window.dispatchEvent(new PopStateEvent('popstate'));
   }, [activeNamespace]);
 

@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: quay.io/epheo/portail-operator
-  newTag: v0.5.0
+  newTag: 0.1.0
