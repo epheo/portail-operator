@@ -7,8 +7,24 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
+
+func TestResourceNameLongGatewayName(t *testing.T) {
+	// "portail-" + this 57-char name = 65 chars, over the 63-char DNS-1123 limit.
+	long := "gateway-with-one-not-matching-port-and-section-name-route"
+	name, err := resourceName(long)
+	if err != nil {
+		t.Fatalf("resourceName returned error for long gateway name: %v", err)
+	}
+	if errs := validation.IsDNS1123Label(name); len(errs) > 0 {
+		t.Fatalf("resourceName %q (%d chars) is not a valid DNS-1123 label: %v", name, len(name), errs)
+	}
+	if got, _ := resourceName(long); got != name {
+		t.Fatalf("resourceName is not deterministic: %q != %q", got, name)
+	}
+}
 
 func testGateway() *gatewayv1.Gateway {
 	return &gatewayv1.Gateway{

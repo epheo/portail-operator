@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"strings"
 
@@ -17,6 +18,10 @@ import (
 
 // NetworkAddressType is the custom address type used to identify multi-network Gateways.
 const NetworkAddressType = gatewayv1.AddressType("portail.epheo.eu/Network")
+
+// readinessDataPlanePort is the port portail serves its /readyz endpoint on,
+// matching portail's --readiness-port default.
+const readinessDataPlanePort int32 = 8081
 
 // ExtractNetworkNames returns deduplicated network names from Gateway addresses
 // of type portail.epheo.eu/Network. It validates that each network name is a
@@ -75,6 +80,24 @@ func DerivePorts(gateway *gatewayv1.Gateway) []DerivedPort {
 
 func resourceName(gatewayName string) (string, error) {
 	name := fmt.Sprintf("portail-%s", gatewayName)
+	if errs := validation.IsDNS1123Label(name); len(errs) == 0 {
+		return name, nil
+	}
+
+	// The prefixed name is invalid (almost always: too long — a DNS-1123 label is
+	// capped at 63 chars and Gateway names can be much longer). Derive a stable,
+	// unique, valid name by truncating and appending a short hash of the full
+	// Gateway name: "portail-" (8) + trunc (<=46) + "-" (1) + hash (8) <= 63.
+	const hashLen = 8
+	const maxTrunc = 63 - len("portail-") - 1 - hashLen
+	sum := sha256.Sum256([]byte(gatewayName))
+	hash := fmt.Sprintf("%x", sum)[:hashLen]
+	trunc := gatewayName
+	if len(trunc) > maxTrunc {
+		trunc = trunc[:maxTrunc]
+	}
+	trunc = strings.TrimRight(trunc, "-")
+	name = fmt.Sprintf("portail-%s-%s", trunc, hash)
 	if errs := validation.IsDNS1123Label(name); len(errs) > 0 {
 		return "", fmt.Errorf("invalid resource name %q derived from gateway %q: %s", name, gatewayName, strings.Join(errs, "; "))
 	}
@@ -162,11 +185,28 @@ func BuildDeployment(gateway *gatewayv1.Gateway, ports []DerivedPort, image, con
 						{
 							Name:  "portail",
 							Image: image,
+							// IfNotPresent so locally-loaded images (kind/conformance,
+							// air-gapped) are used instead of always re-pulling :latest.
+							ImagePullPolicy: corev1.PullIfNotPresent,
 							Args: []string{
 								"--kubernetes",
 								"--controller-name", controllerName,
+								// The operator owns Gateway/GatewayClass lifecycle status;
+								// portail reports only listener + route status.
+								"--manage-gateway-status=false",
 							},
 							Ports: containerPorts,
+							ReadinessProbe: &corev1.Probe{
+								ProbeHandler: corev1.ProbeHandler{
+									HTTPGet: &corev1.HTTPGetAction{
+										Path: "/readyz",
+										Port: intstr.FromInt32(readinessDataPlanePort),
+									},
+								},
+								InitialDelaySeconds: 2,
+								PeriodSeconds:       5,
+								FailureThreshold:    6,
+							},
 							SecurityContext: &corev1.SecurityContext{
 								AllowPrivilegeEscalation: ptr.To(false),
 								ReadOnlyRootFilesystem:   ptr.To(true),
@@ -287,7 +327,7 @@ func BuildService(gateway *gatewayv1.Gateway, ports []DerivedPort) (*corev1.Serv
 		})
 	}
 
-	return &corev1.Service{
+	svc := &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "v1",
 			Kind:       "Service",
@@ -303,5 +343,33 @@ func BuildService(gateway *gatewayv1.Gateway, ports []DerivedPort) (*corev1.Serv
 			Selector: selectorLabels,
 			Ports:    servicePorts,
 		},
-	}, nil
+	}
+
+	// Honor Gateway spec.addresses (IPAddress) by requesting that VIP from the
+	// LoadBalancer provider. Sets the standard (deprecated but widely honored)
+	// field plus the MetalLB annotation (MetalLB >= 0.13). This makes the
+	// GatewayStaticAddresses behavior work: the requested address is what the
+	// Service is assigned.
+	if ips := staticIPAddresses(gateway); len(ips) > 0 {
+		svc.Spec.LoadBalancerIP = ips[0]
+		svc.ObjectMeta.Annotations = map[string]string{
+			"metallb.universe.tf/loadBalancerIPs": strings.Join(ips, ","),
+		}
+	}
+
+	return svc, nil
+}
+
+// staticIPAddresses returns the IPAddress-typed values from spec.addresses
+// (the default type when unset), used to request a specific LoadBalancer VIP.
+func staticIPAddresses(gateway *gatewayv1.Gateway) []string {
+	var ips []string
+	for _, addr := range gateway.Spec.Addresses {
+		if addr.Type == nil || *addr.Type == gatewayv1.IPAddressType {
+			if addr.Value != "" {
+				ips = append(ips, addr.Value)
+			}
+		}
+	}
+	return ips
 }
