@@ -20,8 +20,10 @@ import (
 const NetworkAddressType = gatewayv1.AddressType("portail.epheo.eu/Network")
 
 // readinessDataPlanePort is the port portail serves its /readyz endpoint on,
-// matching portail's --readiness-port default.
-const readinessDataPlanePort int32 = 8081
+// matching portail's --readiness-port default. Picked well clear of common
+// Gateway listener ports (80/443/8080/8081/8443/...) so the readiness server
+// doesn't collide with the data plane within the same pod.
+const readinessDataPlanePort int32 = 19099
 
 // ExtractNetworkNames returns deduplicated network names from Gateway addresses
 // of type portail.epheo.eu/Network. It validates that each network name is a
@@ -194,6 +196,10 @@ func BuildDeployment(gateway *gatewayv1.Gateway, ports []DerivedPort, image, con
 								// The operator owns Gateway/GatewayClass lifecycle status;
 								// portail reports only listener + route status.
 								"--manage-gateway-status=false",
+								// Scope portail to this single Gateway — the operator
+								// provisions one Deployment per Gateway, so each pod
+								// only needs to reconcile its own.
+								"--gateway", fmt.Sprintf("%s/%s", gateway.Namespace, gateway.Name),
 							},
 							Ports: containerPorts,
 							ReadinessProbe: &corev1.Probe{
