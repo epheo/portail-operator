@@ -57,19 +57,19 @@ func (r *leaderRunnable) Start(ctx context.Context) error { return r.fn(ctx) }
 func (r *leaderRunnable) NeedLeaderElection() bool        { return true }
 
 type config struct {
-	metricsAddr             string
-	metricsCertPath         string
-	metricsCertName         string
-	metricsCertKey          string
-	probeAddr               string
-	enableLeaderElection    bool
-	secureMetrics           bool
-	enableHTTP2             bool
-	controllerName          string
-	image                   string
-	replicas                int
-	serviceAccountName      string
-	dataplaneRoleName string
+	metricsAddr          string
+	metricsCertPath      string
+	metricsCertName      string
+	metricsCertKey       string
+	probeAddr            string
+	enableLeaderElection bool
+	secureMetrics        bool
+	enableHTTP2          bool
+	controllerName       string
+	image                string
+	replicas             int
+	serviceAccountName   string
+	dataplaneRoleName    string
 }
 
 func parseFlags() config {
@@ -85,7 +85,8 @@ func parseFlags() config {
 		"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
 	flag.StringVar(&cfg.metricsCertPath, "metrics-cert-path", "",
 		"The directory that contains the metrics server certificate.")
-	flag.StringVar(&cfg.metricsCertName, "metrics-cert-name", "tls.crt", "The name of the metrics server certificate file.")
+	flag.StringVar(&cfg.metricsCertName, "metrics-cert-name", "tls.crt",
+		"The name of the metrics server certificate file.")
 	flag.StringVar(&cfg.metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&cfg.enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics server")
@@ -157,7 +158,7 @@ func main() {
 	gcReconciler := &controller.GatewayClassReconciler{
 		Client:         mgr.GetClient(),
 		Scheme:         mgr.GetScheme(),
-		Recorder:       mgr.GetEventRecorderFor("gatewayclass-controller"),
+		Recorder:       mgr.GetEventRecorder("gatewayclass-controller"),
 		ControllerName: cfg.controllerName,
 	}
 	if err := gcReconciler.SetupWithManager(mgr); err != nil {
@@ -183,12 +184,12 @@ func main() {
 	if err := (&controller.GatewayReconciler{
 		Client:             mgr.GetClient(),
 		Scheme:             mgr.GetScheme(),
-		Recorder:           mgr.GetEventRecorderFor("gateway-controller"),
+		Recorder:           mgr.GetEventRecorder("gateway-controller"),
 		ControllerName:     cfg.controllerName,
 		Image:              cfg.image,
 		Replicas:           int32(cfg.replicas),
 		ServiceAccountName: cfg.serviceAccountName,
-		DataplaneRoleName: cfg.dataplaneRoleName,
+		DataplaneRoleName:  cfg.dataplaneRoleName,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "Gateway")
 		os.Exit(1)
