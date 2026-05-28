@@ -11,6 +11,13 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
+const (
+	testGatewayName      = "test-gw"
+	testGatewayNamespace = "default"
+	testDeploymentName   = "portail-test-gw"
+	testOwnerKindGateway = "Gateway"
+)
+
 func TestResourceNameLongGatewayName(t *testing.T) {
 	// "portail-" + this 57-char name = 65 chars, over the 63-char DNS-1123 limit.
 	long := "gateway-with-one-not-matching-port-and-section-name-route"
@@ -29,8 +36,8 @@ func TestResourceNameLongGatewayName(t *testing.T) {
 func testGateway() *gatewayv1.Gateway {
 	return &gatewayv1.Gateway{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-gw",
-			Namespace: "default",
+			Name:      testGatewayName,
+			Namespace: testGatewayNamespace,
 			UID:       types.UID("test-uid-1234"),
 		},
 		Spec: gatewayv1.GatewaySpec{
@@ -111,11 +118,11 @@ func TestBuildDeployment(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if deploy.Name != "portail-test-gw" {
-		t.Errorf("expected name portail-test-gw, got %s", deploy.Name)
+	if *deploy.Name != testDeploymentName {
+		t.Errorf("expected name portail-test-gw, got %s", *deploy.Name)
 	}
-	if deploy.Namespace != "default" {
-		t.Errorf("expected namespace default, got %s", deploy.Namespace)
+	if *deploy.Namespace != testGatewayNamespace {
+		t.Errorf("expected namespace default, got %s", *deploy.Namespace)
 	}
 	if *deploy.Spec.Replicas != 2 {
 		t.Errorf("expected 2 replicas, got %d", *deploy.Spec.Replicas)
@@ -126,11 +133,11 @@ func TestBuildDeployment(t *testing.T) {
 		t.Fatalf("expected 1 owner reference, got %d", len(deploy.OwnerReferences))
 	}
 	ownerRef := deploy.OwnerReferences[0]
-	if ownerRef.Kind != "Gateway" {
-		t.Errorf("expected owner kind Gateway, got %s", ownerRef.Kind)
+	if *ownerRef.Kind != testOwnerKindGateway {
+		t.Errorf("expected owner kind Gateway, got %s", *ownerRef.Kind)
 	}
-	if ownerRef.Name != "test-gw" {
-		t.Errorf("expected owner name test-gw, got %s", ownerRef.Name)
+	if *ownerRef.Name != testGatewayName {
+		t.Errorf("expected owner name test-gw, got %s", *ownerRef.Name)
 	}
 	if *ownerRef.Controller != true {
 		t.Error("expected controller=true on owner reference")
@@ -142,8 +149,8 @@ func TestBuildDeployment(t *testing.T) {
 		t.Fatalf("expected 1 container, got %d", len(containers))
 	}
 	c := containers[0]
-	if c.Image != "ghcr.io/epheo/portail:latest" {
-		t.Errorf("expected image ghcr.io/epheo/portail:latest, got %s", c.Image)
+	if *c.Image != "ghcr.io/epheo/portail:latest" {
+		t.Errorf("expected image ghcr.io/epheo/portail:latest, got %s", *c.Image)
 	}
 	if len(c.Ports) != 2 {
 		t.Errorf("expected 2 container ports, got %d", len(c.Ports))
@@ -153,7 +160,7 @@ func TestBuildDeployment(t *testing.T) {
 	}
 
 	// Check labels
-	if deploy.Labels["portail.epheo.eu/gateway"] != "test-gw" {
+	if deploy.Labels["portail.epheo.eu/gateway"] != testGatewayName {
 		t.Error("missing gateway label on deployment")
 	}
 }
@@ -166,19 +173,19 @@ func TestBuildService(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if svc.Name != "portail-test-gw" {
-		t.Errorf("expected name portail-test-gw, got %s", svc.Name)
+	if *svc.Name != testDeploymentName {
+		t.Errorf("expected name portail-test-gw, got %s", *svc.Name)
 	}
-	if svc.Spec.Type != corev1.ServiceTypeLoadBalancer {
-		t.Errorf("expected LoadBalancer type, got %s", svc.Spec.Type)
+	if *svc.Spec.Type != corev1.ServiceTypeLoadBalancer {
+		t.Errorf("expected LoadBalancer type, got %s", *svc.Spec.Type)
 	}
 	if len(svc.Spec.Ports) != 2 {
 		t.Fatalf("expected 2 service ports, got %d", len(svc.Spec.Ports))
 	}
-	if svc.Spec.Ports[0].Port != 80 {
-		t.Errorf("expected port 80, got %d", svc.Spec.Ports[0].Port)
+	if *svc.Spec.Ports[0].Port != 80 {
+		t.Errorf("expected port 80, got %d", *svc.Spec.Ports[0].Port)
 	}
-	if svc.Spec.Selector["portail.epheo.eu/gateway"] != "test-gw" {
+	if svc.Spec.Selector["portail.epheo.eu/gateway"] != testGatewayName {
 		t.Error("missing gateway selector on service")
 	}
 
@@ -186,8 +193,8 @@ func TestBuildService(t *testing.T) {
 	if len(svc.OwnerReferences) != 1 {
 		t.Fatalf("expected 1 owner reference, got %d", len(svc.OwnerReferences))
 	}
-	if svc.OwnerReferences[0].Kind != "Gateway" {
-		t.Errorf("expected owner kind Gateway, got %s", svc.OwnerReferences[0].Kind)
+	if *svc.OwnerReferences[0].Kind != testOwnerKindGateway {
+		t.Errorf("expected owner kind Gateway, got %s", *svc.OwnerReferences[0].Kind)
 	}
 }
 
@@ -236,13 +243,13 @@ func TestExtractNetworkNames(t *testing.T) {
 }
 
 func TestBuildServiceAccount(t *testing.T) {
-	sa := BuildServiceAccount("default", "portail-controller")
+	sa := BuildServiceAccount(testGatewayNamespace, "portail-controller")
 
-	if sa.Name != "portail-controller" {
-		t.Errorf("expected SA name %q, got %q", "portail-controller", sa.Name)
+	if *sa.Name != "portail-controller" {
+		t.Errorf("expected SA name %q, got %q", "portail-controller", *sa.Name)
 	}
-	if sa.Namespace != "default" {
-		t.Errorf("expected SA namespace %q, got %q", "default", sa.Namespace)
+	if *sa.Namespace != testGatewayNamespace {
+		t.Errorf("expected SA namespace %q, got %q", testGatewayNamespace, *sa.Namespace)
 	}
 	if sa.Labels["app.kubernetes.io/managed-by"] != "portail-operator" {
 		t.Errorf("expected managed-by label, got %v", sa.Labels)
@@ -254,24 +261,24 @@ func TestBuildServiceAccount(t *testing.T) {
 
 func TestBuildClusterRoleBinding(t *testing.T) {
 	subjects := []rbacv1.Subject{
-		{Kind: "ServiceAccount", Name: "portail-controller", Namespace: "default"},
+		{Kind: "ServiceAccount", Name: "portail-controller", Namespace: testGatewayNamespace},
 		{Kind: "ServiceAccount", Name: "portail-controller", Namespace: "production"},
 	}
 	crb := BuildClusterRoleBinding("portail-operator-dataplane-role", subjects)
 
-	if crb.Name != ClusterRoleBindingName {
-		t.Errorf("expected name %q, got %q", ClusterRoleBindingName, crb.Name)
+	if *crb.Name != ClusterRoleBindingName {
+		t.Errorf("expected name %q, got %q", ClusterRoleBindingName, *crb.Name)
 	}
-	if crb.RoleRef.Name != "portail-operator-dataplane-role" {
-		t.Errorf("expected roleRef name %q, got %q", "portail-operator-dataplane-role", crb.RoleRef.Name)
+	if *crb.RoleRef.Name != "portail-operator-dataplane-role" {
+		t.Errorf("expected roleRef name %q, got %q", "portail-operator-dataplane-role", *crb.RoleRef.Name)
 	}
-	if crb.RoleRef.Kind != "ClusterRole" {
-		t.Errorf("expected roleRef kind ClusterRole, got %q", crb.RoleRef.Kind)
+	if *crb.RoleRef.Kind != "ClusterRole" {
+		t.Errorf("expected roleRef kind ClusterRole, got %q", *crb.RoleRef.Kind)
 	}
 	if len(crb.Subjects) != 2 {
 		t.Fatalf("expected 2 subjects, got %d", len(crb.Subjects))
 	}
-	if crb.Subjects[0].Namespace != "default" || crb.Subjects[1].Namespace != "production" {
+	if *crb.Subjects[0].Namespace != testGatewayNamespace || *crb.Subjects[1].Namespace != "production" {
 		t.Errorf("unexpected subject namespaces: %v", crb.Subjects)
 	}
 }
@@ -346,7 +353,7 @@ func TestBuildDeploymentInvalidGatewayName(t *testing.T) {
 	gw := &gatewayv1.Gateway{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "INVALID_NAME!",
-			Namespace: "default",
+			Namespace: testGatewayNamespace,
 		},
 		Spec: gatewayv1.GatewaySpec{
 			Listeners: []gatewayv1.Listener{
@@ -368,16 +375,16 @@ func TestBuildPodDisruptionBudget(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if pdb.Name != "portail-test-gw" {
-		t.Errorf("expected name portail-test-gw, got %s", pdb.Name)
+	if *pdb.Name != testDeploymentName {
+		t.Errorf("expected name portail-test-gw, got %s", *pdb.Name)
 	}
-	if pdb.Namespace != "default" {
-		t.Errorf("expected namespace default, got %s", pdb.Namespace)
+	if *pdb.Namespace != testGatewayNamespace {
+		t.Errorf("expected namespace default, got %s", *pdb.Namespace)
 	}
 	if pdb.Spec.MaxUnavailable == nil || pdb.Spec.MaxUnavailable.IntValue() != 1 {
 		t.Errorf("expected maxUnavailable=1, got %v", pdb.Spec.MaxUnavailable)
 	}
-	if pdb.Spec.Selector == nil || pdb.Spec.Selector.MatchLabels["portail.epheo.eu/gateway"] != "test-gw" {
+	if pdb.Spec.Selector == nil || pdb.Spec.Selector.MatchLabels["portail.epheo.eu/gateway"] != testGatewayName {
 		t.Error("missing gateway selector on PDB")
 	}
 
@@ -385,8 +392,8 @@ func TestBuildPodDisruptionBudget(t *testing.T) {
 	if len(pdb.OwnerReferences) != 1 {
 		t.Fatalf("expected 1 owner reference, got %d", len(pdb.OwnerReferences))
 	}
-	if pdb.OwnerReferences[0].Kind != "Gateway" {
-		t.Errorf("expected owner kind Gateway, got %s", pdb.OwnerReferences[0].Kind)
+	if *pdb.OwnerReferences[0].Kind != testOwnerKindGateway {
+		t.Errorf("expected owner kind Gateway, got %s", *pdb.OwnerReferences[0].Kind)
 	}
 }
 
@@ -394,7 +401,7 @@ func TestBuildServiceInvalidGatewayName(t *testing.T) {
 	gw := &gatewayv1.Gateway{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "INVALID_NAME!",
-			Namespace: "default",
+			Namespace: testGatewayNamespace,
 		},
 		Spec: gatewayv1.GatewaySpec{
 			Listeners: []gatewayv1.Listener{

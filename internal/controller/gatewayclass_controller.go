@@ -8,7 +8,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -25,7 +25,7 @@ const gatewayClassFinalizer = "gateway-exists-finalizer.gateway.networking.k8s.i
 type GatewayClassReconciler struct {
 	client.Client
 	Scheme         *runtime.Scheme
-	Recorder       record.EventRecorder
+	Recorder       events.EventRecorder
 	ControllerName string
 }
 
@@ -37,7 +37,7 @@ const DefaultGatewayClassName = "portail"
 
 // EnsureDefaultGatewayClass creates a default GatewayClass if none exists for this controller.
 func (r *GatewayClassReconciler) EnsureDefaultGatewayClass(ctx context.Context) error {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
 	var gcList gatewayv1.GatewayClassList
 	if err := r.List(ctx, &gcList); err != nil {
@@ -45,7 +45,7 @@ func (r *GatewayClassReconciler) EnsureDefaultGatewayClass(ctx context.Context) 
 	}
 	for i := range gcList.Items {
 		if gcList.Items[i].Spec.ControllerName == gatewayv1.GatewayController(r.ControllerName) {
-			log.Info("GatewayClass already exists for controller", "name", gcList.Items[i].Name)
+			logger.Info("GatewayClass already exists for controller", "name", gcList.Items[i].Name)
 			return nil
 		}
 	}
@@ -65,12 +65,12 @@ func (r *GatewayClassReconciler) EnsureDefaultGatewayClass(ctx context.Context) 
 	if err := r.Create(ctx, gc); err != nil {
 		return err
 	}
-	log.Info("Created default GatewayClass", "name", DefaultGatewayClassName)
+	logger.Info("Created default GatewayClass", "name", DefaultGatewayClassName)
 	return nil
 }
 
 func (r *GatewayClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
 	var gc gatewayv1.GatewayClass
 	if err := r.Get(ctx, req.NamespacedName, &gc); err != nil {
@@ -82,7 +82,7 @@ func (r *GatewayClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, nil
 	}
 
-	log.Info("Reconciling GatewayClass", "name", gc.Name)
+	logger.Info("Reconciling GatewayClass", "name", gc.Name)
 
 	// List Gateways referencing this GatewayClass
 	var gatewayList gatewayv1.GatewayList
@@ -103,14 +103,14 @@ func (r *GatewayClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			if err := r.Update(ctx, &gc); err != nil {
 				return ctrl.Result{}, err
 			}
-			r.Recorder.Event(&gc, corev1.EventTypeNormal, "FinalizerAdded", "Added gateway-exists finalizer")
+			r.Recorder.Eventf(&gc, nil, corev1.EventTypeNormal, "FinalizerAdded", "FinalizerAdded", "Added gateway-exists finalizer")
 		}
 	} else {
 		if controllerutil.RemoveFinalizer(&gc, gatewayClassFinalizer) {
 			if err := r.Update(ctx, &gc); err != nil {
 				return ctrl.Result{}, err
 			}
-			r.Recorder.Event(&gc, corev1.EventTypeNormal, "FinalizerRemoved", "Removed gateway-exists finalizer")
+			r.Recorder.Eventf(&gc, nil, corev1.EventTypeNormal, "FinalizerRemoved", "FinalizerRemoved", "Removed gateway-exists finalizer")
 		}
 		// If being deleted and finalizer is now removed, we're done
 		if !gc.DeletionTimestamp.IsZero() {
@@ -131,7 +131,7 @@ func (r *GatewayClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if err := r.Status().Update(ctx, &gc); err != nil {
 		return ctrl.Result{}, err
 	}
-	r.Recorder.Event(&gc, corev1.EventTypeNormal, "Accepted", "GatewayClass accepted")
+	r.Recorder.Eventf(&gc, nil, corev1.EventTypeNormal, "Accepted", "Accepted", "GatewayClass accepted")
 
 	return ctrl.Result{}, nil
 }

@@ -13,7 +13,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
+	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -29,7 +31,7 @@ const gatewayFinalizer = "portail.epheo.eu/rbac-cleanup"
 type GatewayReconciler struct {
 	client.Client
 	Scheme             *runtime.Scheme
-	Recorder           record.EventRecorder
+	Recorder           events.EventRecorder
 	ControllerName     string
 	Image              string
 	Replicas           int32
@@ -48,7 +50,7 @@ type GatewayReconciler struct {
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 
 func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
 	// Fetch the Gateway
 	var gateway gatewayv1.Gateway
@@ -63,7 +65,7 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	var gc gatewayv1.GatewayClass
 	if err := r.Get(ctx, types.NamespacedName{Name: string(gateway.Spec.GatewayClassName)}, &gc); err != nil {
 		if apierrors.IsNotFound(err) {
-			log.V(1).Info("GatewayClass not found, skipping", "gatewayClass", gateway.Spec.GatewayClassName)
+			logger.V(1).Info("GatewayClass not found, skipping", "gatewayClass", gateway.Spec.GatewayClassName)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
@@ -93,13 +95,13 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 	}
 
-	log.Info("Reconciling Gateway", "gateway", gateway.Name, "namespace", gateway.Namespace)
+	logger.Info("Reconciling Gateway", "gateway", gateway.Name, "namespace", gateway.Namespace)
 
 	// Derive ports and detect mode
 	ports := DerivePorts(&gateway)
 	networks, err := ExtractNetworkNames(&gateway)
 	if err != nil {
-		r.Recorder.Eventf(&gateway, corev1.EventTypeWarning, "InvalidNetwork", "Invalid network name: %v", err)
+		r.Recorder.Eventf(&gateway, nil, corev1.EventTypeWarning, "InvalidNetwork", "InvalidNetwork", "Invalid network name: %v", err)
 		apimeta.SetStatusCondition(&gateway.Status.Conditions, metav1.Condition{
 			Type:               string(gatewayv1.GatewayConditionAccepted),
 			Status:             metav1.ConditionFalse,
@@ -109,28 +111,28 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			Message:            err.Error(),
 		})
 		if statusErr := r.Status().Update(ctx, &gateway); statusErr != nil {
-			log.Error(statusErr, "Failed to update Gateway status")
+			logger.Error(statusErr, "Failed to update Gateway status")
 		}
 		return ctrl.Result{}, nil
 	}
 
 	// Ensure ServiceAccount exists for the data plane
 	desiredSA := BuildServiceAccount(gateway.Namespace, r.ServiceAccountName)
-	if err := r.Patch(ctx, desiredSA, client.Apply, client.FieldOwner("portail-operator"), client.ForceOwnership); err != nil {
-		r.Recorder.Eventf(&gateway, corev1.EventTypeWarning, "ServiceAccountFailed", "Failed to apply ServiceAccount: %v", err)
+	if err := r.Apply(ctx, desiredSA, client.FieldOwner("portail-operator"), client.ForceOwnership); err != nil {
+		r.Recorder.Eventf(&gateway, nil, corev1.EventTypeWarning, "ServiceAccountFailed", "ServiceAccountFailed", "Failed to apply ServiceAccount: %v", err)
 		return ctrl.Result{}, fmt.Errorf("applying ServiceAccount: %w", err)
 	}
 
 	// Reconcile the shared ClusterRoleBinding with subjects from all namespaces
 	if err := r.reconcileClusterRoleBinding(ctx, &gateway); err != nil {
-		r.Recorder.Eventf(&gateway, corev1.EventTypeWarning, "ClusterRoleBindingFailed", "Failed to reconcile ClusterRoleBinding: %v", err)
+		r.Recorder.Eventf(&gateway, nil, corev1.EventTypeWarning, "ClusterRoleBindingFailed", "ClusterRoleBindingFailed", "Failed to reconcile ClusterRoleBinding: %v", err)
 		return ctrl.Result{}, fmt.Errorf("reconciling ClusterRoleBinding: %w", err)
 	}
-	r.Recorder.Eventf(&gateway, corev1.EventTypeNormal, "RBACApplied", "RBAC applied for %q", r.ServiceAccountName)
+	r.Recorder.Eventf(&gateway, nil, corev1.EventTypeNormal, "RBACApplied", "RBACApplied", "RBAC applied for %q", r.ServiceAccountName)
 
 	desiredDeploy, err := BuildDeployment(&gateway, ports, r.Image, r.ControllerName, r.ServiceAccountName, r.Replicas, networks)
 	if err != nil {
-		r.Recorder.Eventf(&gateway, corev1.EventTypeWarning, "InvalidGateway", "Invalid gateway name: %v", err)
+		r.Recorder.Eventf(&gateway, nil, corev1.EventTypeWarning, "InvalidGateway", "InvalidGateway", "Invalid gateway name: %v", err)
 		apimeta.SetStatusCondition(&gateway.Status.Conditions, metav1.Condition{
 			Type:               string(gatewayv1.GatewayConditionAccepted),
 			Status:             metav1.ConditionFalse,
@@ -140,33 +142,33 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			Message:            err.Error(),
 		})
 		if statusErr := r.Status().Update(ctx, &gateway); statusErr != nil {
-			log.Error(statusErr, "Failed to update Gateway status")
+			logger.Error(statusErr, "Failed to update Gateway status")
 		}
 		return ctrl.Result{}, nil
 	}
 
 	// Apply Deployment via Server-Side Apply (both modes)
-	if err := r.Patch(ctx, desiredDeploy, client.Apply, client.FieldOwner("portail-operator"), client.ForceOwnership); err != nil {
-		r.Recorder.Eventf(&gateway, corev1.EventTypeWarning, "DeploymentFailed", "Failed to apply Deployment: %v", err)
+	if err := r.Apply(ctx, desiredDeploy, client.FieldOwner("portail-operator"), client.ForceOwnership); err != nil {
+		r.Recorder.Eventf(&gateway, nil, corev1.EventTypeWarning, "DeploymentFailed", "DeploymentFailed", "Failed to apply Deployment: %v", err)
 		return ctrl.Result{}, fmt.Errorf("applying Deployment: %w", err)
 	}
-	r.Recorder.Eventf(&gateway, corev1.EventTypeNormal, "DeploymentApplied", "Deployment %q applied", desiredDeploy.Name)
-	log.Info("Applied Deployment", "name", desiredDeploy.Name)
+	r.Recorder.Eventf(&gateway, nil, corev1.EventTypeNormal, "DeploymentApplied", "DeploymentApplied", "Deployment %q applied", *desiredDeploy.Name)
+	logger.Info("Applied Deployment", "name", *desiredDeploy.Name)
 
 	// Apply PodDisruptionBudget
 	desiredPDB, err := BuildPodDisruptionBudget(&gateway)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("building PodDisruptionBudget: %w", err)
 	}
-	if err := r.Patch(ctx, desiredPDB, client.Apply, client.FieldOwner("portail-operator"), client.ForceOwnership); err != nil {
-		r.Recorder.Eventf(&gateway, corev1.EventTypeWarning, "PDBFailed", "Failed to apply PodDisruptionBudget: %v", err)
+	if err := r.Apply(ctx, desiredPDB, client.FieldOwner("portail-operator"), client.ForceOwnership); err != nil {
+		r.Recorder.Eventf(&gateway, nil, corev1.EventTypeWarning, "PDBFailed", "PDBFailed", "Failed to apply PodDisruptionBudget: %v", err)
 		return ctrl.Result{}, fmt.Errorf("applying PodDisruptionBudget: %w", err)
 	}
-	log.Info("Applied PodDisruptionBudget", "name", desiredPDB.Name)
+	logger.Info("Applied PodDisruptionBudget", "name", *desiredPDB.Name)
 
 	if len(networks) > 0 {
 		// Multi-network mode: no Service needed
-		r.Recorder.Eventf(&gateway, corev1.EventTypeNormal, "MultiNetworkMode", "Multi-network mode with networks: %v", networks)
+		r.Recorder.Eventf(&gateway, nil, corev1.EventTypeNormal, "MultiNetworkMode", "MultiNetworkMode", "Multi-network mode with networks: %v", networks)
 		if err := r.deleteOrphanedService(ctx, &gateway); err != nil {
 			return ctrl.Result{}, fmt.Errorf("cleaning up orphaned Service: %w", err)
 		}
@@ -179,12 +181,12 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("building Service: %w", err)
 		}
-		if err := r.Patch(ctx, desiredService, client.Apply, client.FieldOwner("portail-operator"), client.ForceOwnership); err != nil {
-			r.Recorder.Eventf(&gateway, corev1.EventTypeWarning, "ServiceFailed", "Failed to apply Service: %v", err)
+		if err := r.Apply(ctx, desiredService, client.FieldOwner("portail-operator"), client.ForceOwnership); err != nil {
+			r.Recorder.Eventf(&gateway, nil, corev1.EventTypeWarning, "ServiceFailed", "ServiceFailed", "Failed to apply Service: %v", err)
 			return ctrl.Result{}, fmt.Errorf("applying Service: %w", err)
 		}
-		r.Recorder.Eventf(&gateway, corev1.EventTypeNormal, "ServiceApplied", "Service %q applied (LoadBalancer)", desiredService.Name)
-		log.Info("Applied Service", "name", desiredService.Name)
+		r.Recorder.Eventf(&gateway, nil, corev1.EventTypeNormal, "ServiceApplied", "ServiceApplied", "Service %q applied (LoadBalancer)", *desiredService.Name)
+		logger.Info("Applied Service", "name", *desiredService.Name)
 
 		if err := r.updateGatewayStatus(ctx, &gateway, desiredDeploy, desiredService); err != nil {
 			return ctrl.Result{}, fmt.Errorf("updating Gateway status: %w", err)
@@ -219,7 +221,7 @@ func (r *GatewayReconciler) reconcileClusterRoleBinding(ctx context.Context, gat
 	}
 
 	desired := BuildClusterRoleBinding(r.DataplaneRoleName, subjects)
-	return r.Patch(ctx, desired, client.Apply, client.FieldOwner("portail-operator"), client.ForceOwnership)
+	return r.Apply(ctx, desired, client.FieldOwner("portail-operator"), client.ForceOwnership)
 }
 
 // collectSubjects lists all Gateways managed by this operator and returns
@@ -261,7 +263,7 @@ func (r *GatewayReconciler) collectSubjects(ctx context.Context) ([]rbacv1.Subje
 
 // cleanupRBAC updates or removes the shared ClusterRoleBinding when a Gateway is deleted.
 func (r *GatewayReconciler) cleanupRBAC(ctx context.Context, deletingGateway *gatewayv1.Gateway) error {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
 	var gatewayList gatewayv1.GatewayList
 	if err := r.List(ctx, &gatewayList); err != nil {
@@ -298,14 +300,14 @@ func (r *GatewayReconciler) cleanupRBAC(ctx context.Context, deletingGateway *ga
 	// when the namespace is deleted. Blocking the finalizer on a permission error would
 	// leave the Gateway stuck in deletion.
 	if !seenNS[deletingGateway.Namespace] {
-		log.Info("No remaining Gateways in namespace, cleaning up ServiceAccount",
+		logger.Info("No remaining Gateways in namespace, cleaning up ServiceAccount",
 			"namespace", deletingGateway.Namespace)
 		sa := &corev1.ServiceAccount{}
 		sa.Name = r.ServiceAccountName
 		sa.Namespace = deletingGateway.Namespace
 		if err := client.IgnoreNotFound(r.Delete(ctx, sa)); err != nil {
 			if apierrors.IsForbidden(err) {
-				log.Error(err, "Permission denied deleting ServiceAccount, skipping cleanup")
+				logger.Error(err, "Permission denied deleting ServiceAccount, skipping cleanup")
 			} else {
 				return err
 			}
@@ -313,12 +315,12 @@ func (r *GatewayReconciler) cleanupRBAC(ctx context.Context, deletingGateway *ga
 	}
 
 	if len(remainingSubjects) == 0 {
-		log.Info("No remaining Gateways, deleting ClusterRoleBinding")
+		logger.Info("No remaining Gateways, deleting ClusterRoleBinding")
 		crb := &rbacv1.ClusterRoleBinding{}
 		crb.Name = ClusterRoleBindingName
 		if err := client.IgnoreNotFound(r.Delete(ctx, crb)); err != nil {
 			if apierrors.IsForbidden(err) {
-				log.Error(err, "Permission denied deleting ClusterRoleBinding, skipping cleanup")
+				logger.Error(err, "Permission denied deleting ClusterRoleBinding, skipping cleanup")
 			} else {
 				return err
 			}
@@ -327,10 +329,10 @@ func (r *GatewayReconciler) cleanupRBAC(ctx context.Context, deletingGateway *ga
 	}
 
 	desired := BuildClusterRoleBinding(r.DataplaneRoleName, remainingSubjects)
-	return r.Patch(ctx, desired, client.Apply, client.FieldOwner("portail-operator"), client.ForceOwnership)
+	return r.Apply(ctx, desired, client.FieldOwner("portail-operator"), client.ForceOwnership)
 }
 
-func (r *GatewayReconciler) updateGatewayStatus(ctx context.Context, gateway *gatewayv1.Gateway, deploy *appsv1.Deployment, svc *corev1.Service) error {
+func (r *GatewayReconciler) updateGatewayStatus(ctx context.Context, gateway *gatewayv1.Gateway, deploy *appsv1ac.DeploymentApplyConfiguration, svc *corev1ac.ServiceApplyConfiguration) error {
 	patch := client.MergeFrom(gateway.DeepCopy())
 	now := metav1.Now()
 
@@ -347,7 +349,7 @@ func (r *GatewayReconciler) updateGatewayStatus(ctx context.Context, gateway *ga
 	apimeta.SetStatusCondition(&gateway.Status.Conditions, programmedCondition)
 
 	var currentSvc corev1.Service
-	if err := r.Get(ctx, types.NamespacedName{Name: svc.Name, Namespace: svc.Namespace}, &currentSvc); err == nil {
+	if err := r.Get(ctx, types.NamespacedName{Name: *svc.Name, Namespace: *svc.Namespace}, &currentSvc); err == nil {
 		var addresses []gatewayv1.GatewayStatusAddress
 		for _, ingress := range currentSvc.Status.LoadBalancer.Ingress {
 			if ingress.IP != "" {
@@ -371,11 +373,11 @@ func (r *GatewayReconciler) updateGatewayStatus(ctx context.Context, gateway *ga
 	return r.Status().Patch(ctx, gateway, patch)
 }
 
-func (r *GatewayReconciler) programmedCondition(ctx context.Context, gateway *gatewayv1.Gateway, deploy *appsv1.Deployment) metav1.Condition {
+func (r *GatewayReconciler) programmedCondition(ctx context.Context, gateway *gatewayv1.Gateway, deploy *appsv1ac.DeploymentApplyConfiguration) metav1.Condition {
 	now := metav1.Now()
 
 	var currentDeploy appsv1.Deployment
-	if err := r.Get(ctx, types.NamespacedName{Name: deploy.Name, Namespace: deploy.Namespace}, &currentDeploy); err != nil {
+	if err := r.Get(ctx, types.NamespacedName{Name: *deploy.Name, Namespace: *deploy.Namespace}, &currentDeploy); err != nil {
 		return metav1.Condition{
 			Type:               string(gatewayv1.GatewayConditionProgrammed),
 			Status:             metav1.ConditionFalse,
@@ -387,7 +389,7 @@ func (r *GatewayReconciler) programmedCondition(ctx context.Context, gateway *ga
 	}
 
 	if currentDeploy.Status.AvailableReplicas > 0 {
-		r.Recorder.Eventf(gateway, corev1.EventTypeNormal, "DataPlaneReady",
+		r.Recorder.Eventf(gateway, nil, corev1.EventTypeNormal, "DataPlaneReady", "DataPlaneReady",
 			"Data plane ready: %d/%d replicas available",
 			currentDeploy.Status.AvailableReplicas, currentDeploy.Status.Replicas)
 		return metav1.Condition{
@@ -401,7 +403,7 @@ func (r *GatewayReconciler) programmedCondition(ctx context.Context, gateway *ga
 		}
 	}
 
-	r.Recorder.Eventf(gateway, corev1.EventTypeNormal, "DataPlanePending",
+	r.Recorder.Eventf(gateway, nil, corev1.EventTypeNormal, "DataPlanePending", "DataPlanePending",
 		"Waiting for data plane: 0/%d replicas available",
 		currentDeploy.Status.Replicas)
 	return metav1.Condition{
@@ -431,7 +433,7 @@ func (r *GatewayReconciler) deleteOrphanedService(ctx context.Context, gateway *
 	return r.Delete(ctx, &svc)
 }
 
-func (r *GatewayReconciler) updateGatewayStatusMultiNetwork(ctx context.Context, gateway *gatewayv1.Gateway, deploy *appsv1.Deployment, networks []string) error {
+func (r *GatewayReconciler) updateGatewayStatusMultiNetwork(ctx context.Context, gateway *gatewayv1.Gateway, deploy *appsv1ac.DeploymentApplyConfiguration, networks []string) error {
 	patch := client.MergeFrom(gateway.DeepCopy())
 	now := metav1.Now()
 
@@ -447,7 +449,7 @@ func (r *GatewayReconciler) updateGatewayStatusMultiNetwork(ctx context.Context,
 	programmedCondition := r.programmedCondition(ctx, gateway, deploy)
 	apimeta.SetStatusCondition(&gateway.Status.Conditions, programmedCondition)
 
-	var addresses []gatewayv1.GatewayStatusAddress
+	addresses := make([]gatewayv1.GatewayStatusAddress, 0, len(networks))
 	for _, net := range networks {
 		addrType := NetworkAddressType
 		addresses = append(addresses, gatewayv1.GatewayStatusAddress{
