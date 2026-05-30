@@ -45,11 +45,6 @@ const TopologyPage: React.FC = () => {
     setIsRouteModalOpen(true);
   }, []);
 
-  const handleOpenRouteModal = useCallback(() => {
-    setPreselectedGateway(undefined);
-    setIsRouteModalOpen(true);
-  }, []);
-
   if (error) {
     return (
       <div className="portail-topology-page">

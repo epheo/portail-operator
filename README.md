@@ -1,137 +1,102 @@
 # portail-operator
 
-Portail Operator watches Kubernetes Gateway API resources and automatically manages the lifecycle of Portail data plane Deployments and LoadBalancer Services.
+<img src="logo_icon.png" alt="portail" width="88" align="right"/>
 
-## Description
+A Kubernetes [Gateway API](https://gateway-api.sigs.k8s.io/) controller that provisions and operates the **portail** data plane. It watches `GatewayClass` and `Gateway` resources and reconciles the workloads that serve their traffic.
 
-When a `GatewayClass` referencing the Portail controller is created, the operator marks it as `Accepted`. For each `Gateway` that references an accepted `GatewayClass`, the operator derives listener ports and reconciles a data plane `Deployment` and a `LoadBalancer` `Service` using Server-Side Apply. Owner references ensure automatic cleanup when a Gateway is deleted.
+## How it works
 
-## Getting Started
+The operator registers the controller `portail.epheo.eu/gateway-controller` and creates a default `portail` GatewayClass at startup. For every `Gateway` bound to a GatewayClass it owns, it provisions and keeps in sync:
+
+- a **Deployment** running the portail data plane, scoped to that single Gateway
+- a **LoadBalancer Service** exposing the Gateway's listener ports
+- a per-namespace **ServiceAccount** and a **PodDisruptionBudget**
+
+Cluster-scoped RBAC is reconciled by a singleton controller that maintains one shared `ClusterRoleBinding` across all data-plane ServiceAccounts and prunes orphans. Managed workloads are owned by their Gateway, so deleting a Gateway garbage-collects them.
+
+## Features
+
+- **Gateway API native** — HTTP, HTTPS, TLS, TCP, UDP, and gRPC listeners.
+- **Per-Gateway data plane** — each Gateway gets its own isolated deployment.
+- **Multi-network** — attach a Gateway to additional cluster networks via the `portail.epheo.eu/Network` address type (Multus CNI).
+- **Restricted-PSS compliant** — runs non-root with a read-only root filesystem and all capabilities dropped; privileged listener ports are mapped to unprivileged target ports.
+- **OpenShift console plugin** — network topology view with Gateway and route management.
+
+## Getting started
 
 ### Prerequisites
-- go version v1.25.0+
-- podman version 4.0+
-- kubectl version v1.28.0+
-- Access to a Kubernetes v1.28.0+ cluster (Gateway API v1 requirement)
 
-### To Deploy on the cluster
-**Build and push your image to the location specified by `IMG`:**
+- A Kubernetes 1.28+ cluster with the [Gateway API CRDs](https://gateway-api.sigs.k8s.io/guides/#installing-gateway-api) installed.
+- `kubectl` with access to the cluster.
+
+### Deploy
 
 ```sh
-make image-build image-push IMG=<some-registry>/portail-operator:tag
+make deploy IMG=<registry>/portail-operator:tag
 ```
 
-**NOTE:** This image ought to be published in the personal registry you specified.
-And it is required to have access to pull the image from the working environment.
-Make sure you have the proper permission to the registry if the above commands don't work.
-
-**Install the CRDs into the cluster:**
+To build and publish the operator image first:
 
 ```sh
-make install
+make image-build image-push IMG=<registry>/portail-operator:tag
 ```
 
-**Deploy the Manager to the cluster with the image specified by `IMG`:**
+### Create a Gateway
+
+The `portail` GatewayClass is created automatically. Apply a Gateway that references it:
 
 ```sh
-make deploy IMG=<some-registry>/portail-operator:tag
+kubectl apply -f config/samples/gateway.yaml
 ```
 
-> **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
-privileges or be logged in as admin.
+See `config/samples/` for HTTPS, multi-network, and UDN/TCP examples.
 
-**Create instances of your solution**
-You can apply the samples (examples) from the config/sample:
-
-```sh
-kubectl apply -k config/samples/
-```
-
->**NOTE**: Ensure that the samples has default values to test it out.
-
-### To Uninstall
-**Delete the instances (CRs) from the cluster:**
-
-```sh
-kubectl delete -k config/samples/
-```
-
-**Delete the APIs(CRDs) from the cluster:**
-
-```sh
-make uninstall
-```
-
-**UnDeploy the controller from the cluster:**
+### Uninstall
 
 ```sh
 make undeploy
 ```
 
-## Project Distribution
+## Configuration
 
-Following the options to release and provide this solution to the users.
+The manager accepts the following flags, set on the operator Deployment:
 
-### By providing a bundle with all YAML files
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--image` | `ghcr.io/epheo/portail:latest` | Data-plane container image. |
+| `--controller-name` | `portail.epheo.eu/gateway-controller` | GatewayClass controller name to match. |
+| `--default-replicas` | `2` | Replicas for each managed data-plane Deployment. |
+| `--leader-elect` | `false` | Enable leader election for high availability. |
+| `--metrics-bind-address` | `0` | Metrics endpoint address (`0` disables it). |
 
-1. Build the installer for the image built and published in the registry:
+## Console plugin
 
-```sh
-make build-installer IMG=<some-registry>/portail-operator:tag
-```
-
-**NOTE:** The makefile target mentioned above generates an 'install.yaml'
-file in the dist directory. This file contains all the resources built
-with Kustomize, which are necessary to install this project without its
-dependencies.
-
-2. Using the installer
-
-Users can just run 'kubectl apply -f <URL for YAML BUNDLE>' to install
-the project, i.e.:
+An OpenShift console plugin under [`console-plugin/`](console-plugin/) adds a network topology view. Build, publish, and deploy it with:
 
 ```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/portail-operator/<tag or branch>/dist/install.yaml
+make console-plugin-image-build console-plugin-image-push CONSOLE_PLUGIN_IMG=<registry>/portail-console-plugin:tag
+make console-plugin-deploy
 ```
 
-### By providing a Helm Chart
+## Distribution
 
-1. Build the chart using the optional helm plugin
+Generate a single self-contained manifest:
 
 ```sh
-kubebuilder edit --plugins=helm/v2-alpha
+make build-installer IMG=<registry>/portail-operator:tag
+kubectl apply -f dist/install.yaml
 ```
 
-2. See that a chart was generated under 'dist/chart', and users
-can obtain this solution from there.
+Or build an [OLM](https://olm.operatorframework.io/) bundle:
 
-**NOTE:** If you change the project, you need to update the Helm Chart
-using the same command above to sync the latest changes. Furthermore,
-if you create webhooks, you need to use the above command with
-the '--force' flag and manually ensure that any custom configuration
-previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml'
-is manually re-applied afterwards.
+```sh
+make bundle bundle-build bundle-push IMG=<registry>/portail-operator:tag
+```
 
-## Contributing
+## Development
 
-Contributions are welcome. Please open an issue or pull request on GitHub.
-
-**NOTE:** Run `make help` for more information on all potential `make` targets
-
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
+See [CONTRIBUTING.md](CONTRIBUTING.md). Common targets: `make build`, `make test`, `make test-e2e`, `make lint`.
 
 ## License
 
-Copyright 2026.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+[Apache 2.0](LICENSE).

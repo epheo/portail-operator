@@ -3,6 +3,7 @@ package controller
 import (
 	"crypto/sha256"
 	"fmt"
+	"slices"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -81,6 +82,65 @@ func DerivePorts(gateway *gatewayv1.Gateway) []DerivedPort {
 	return ports
 }
 
+// privilegedPortMax is the highest privileged port. A non-root container with
+// allowPrivilegeEscalation=false cannot bind these, so privileged listener ports
+// are served on an unprivileged target port that the Service maps to.
+const privilegedPortMax int32 = 1023
+
+// targetPortPoolBase is the start of the unprivileged pool used for privileged
+// listener ports.
+const targetPortPoolBase int32 = 8000
+
+// allocateTargetPorts maps each published (listener) port to the unprivileged port
+// the data plane actually binds — which the Service then targets. Ports above the
+// privileged range bind themselves; privileged ports draw from an unprivileged pool.
+// existing carries the live Service's published->target assignments so unchanged
+// listeners keep their target across reconciles (stability). Allocation is
+// deterministic and collision-free by construction (it allocates around ports
+// already in use rather than offsetting).
+func allocateTargetPorts(ports []DerivedPort, existing map[int32]int32) map[int32]int32 {
+	published := make([]int32, 0, len(ports))
+	for _, p := range ports {
+		published = append(published, p.Port)
+	}
+	slices.Sort(published)
+
+	target := make(map[int32]int32, len(published))
+	used := make(map[int32]bool, len(published))
+
+	// Unprivileged published ports bind themselves.
+	for _, p := range published {
+		if p > privilegedPortMax {
+			target[p] = p
+			used[p] = true
+		}
+	}
+	// Preserve a privileged port's existing target when still valid and free.
+	for _, p := range published {
+		if p > privilegedPortMax {
+			continue
+		}
+		if t, ok := existing[p]; ok && t > privilegedPortMax && !used[t] {
+			target[p] = t
+			used[t] = true
+		}
+	}
+	// Allocate the remaining privileged ports from the pool.
+	next := targetPortPoolBase
+	for _, p := range published {
+		if p > privilegedPortMax || target[p] != 0 {
+			continue
+		}
+		for used[next] {
+			next++
+		}
+		target[p] = next
+		used[next] = true
+		next++
+	}
+	return target
+}
+
 func resourceName(gatewayName string) (string, error) {
 	name := fmt.Sprintf("portail-%s", gatewayName)
 	if errs := validation.IsDNS1123Label(name); len(errs) == 0 {
@@ -107,12 +167,19 @@ func resourceName(gatewayName string) (string, error) {
 	return name, nil
 }
 
-func commonLabels(gatewayName string) map[string]string {
+// baseLabels are the identifying labels applied to every resource the operator
+// manages.
+func baseLabels() map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/name":       "portail",
 		"app.kubernetes.io/managed-by": "portail-operator",
-		"portail.epheo.eu/gateway":     gatewayName,
 	}
+}
+
+func commonLabels(gatewayName string) map[string]string {
+	labels := baseLabels()
+	labels["portail.epheo.eu/gateway"] = gatewayName
+	return labels
 }
 
 func ownerReference(gateway *gatewayv1.Gateway) *metav1ac.OwnerReferenceApplyConfiguration {
@@ -128,7 +195,7 @@ func ownerReference(gateway *gatewayv1.Gateway) *metav1ac.OwnerReferenceApplyCon
 // BuildDeployment creates the desired Deployment for a Gateway.
 // When networks is non-empty, the pod template is annotated with k8s.v1.cni.cncf.io/networks
 // for multi-network attachment.
-func BuildDeployment(gateway *gatewayv1.Gateway, ports []DerivedPort, image, controllerName, serviceAccountName string, replicas int32, networks []string) (*appsv1ac.DeploymentApplyConfiguration, error) {
+func BuildDeployment(gateway *gatewayv1.Gateway, image, controllerName, serviceAccountName string, replicas int32, networks []string) (*appsv1ac.DeploymentApplyConfiguration, error) {
 	name, err := resourceName(gateway.Name)
 	if err != nil {
 		return nil, err
@@ -138,12 +205,18 @@ func BuildDeployment(gateway *gatewayv1.Gateway, ports []DerivedPort, image, con
 		"portail.epheo.eu/gateway": gateway.Name,
 	}
 
-	containerPorts := make([]*corev1ac.ContainerPortApplyConfiguration, 0, len(ports))
-	for _, p := range ports {
-		containerPorts = append(containerPorts, corev1ac.ContainerPort().
-			WithName(p.Name).
-			WithContainerPort(p.Port).
-			WithProtocol(p.Protocol))
+	// Per-listener container ports are intentionally not declared: they are purely
+	// informational in Kubernetes, so omitting them means adding or removing a
+	// listener does not change the pod template (the data plane is not restarted).
+	// The Service carries the published->target port mapping.
+
+	// NET_BIND_SERVICE is only needed when the data plane binds the published
+	// (possibly privileged) port directly — multi-network mode, where no Service
+	// fronts the pod. In LoadBalancer mode the pod binds unprivileged target ports
+	// and needs no added capability, staying fully restricted-PSS compliant.
+	caps := corev1ac.Capabilities().WithDrop(corev1.Capability("ALL"))
+	if len(networks) > 0 {
+		caps = caps.WithAdd(corev1.Capability("NET_BIND_SERVICE"))
 	}
 
 	container := corev1ac.Container().
@@ -163,7 +236,6 @@ func BuildDeployment(gateway *gatewayv1.Gateway, ports []DerivedPort, image, con
 			// only needs to reconcile its own.
 			"--gateway", fmt.Sprintf("%s/%s", gateway.Namespace, gateway.Name),
 		).
-		WithPorts(containerPorts...).
 		WithReadinessProbe(corev1ac.Probe().
 			WithHTTPGet(corev1ac.HTTPGetAction().
 				WithPath("/readyz").
@@ -174,9 +246,7 @@ func BuildDeployment(gateway *gatewayv1.Gateway, ports []DerivedPort, image, con
 		WithSecurityContext(corev1ac.SecurityContext().
 			WithAllowPrivilegeEscalation(false).
 			WithReadOnlyRootFilesystem(true).
-			WithCapabilities(corev1ac.Capabilities().
-				WithDrop(corev1.Capability("ALL")).
-				WithAdd(corev1.Capability("NET_BIND_SERVICE"))))
+			WithCapabilities(caps))
 
 	podSpec := corev1ac.PodSpec().
 		WithServiceAccountName(serviceAccountName).
@@ -210,10 +280,7 @@ func BuildDeployment(gateway *gatewayv1.Gateway, ports []DerivedPort, image, con
 // Cleanup is handled explicitly in cleanupRBAC.
 func BuildServiceAccount(namespace, serviceAccountName string) *corev1ac.ServiceAccountApplyConfiguration {
 	return corev1ac.ServiceAccount(serviceAccountName, namespace).
-		WithLabels(map[string]string{
-			"app.kubernetes.io/name":       "portail",
-			"app.kubernetes.io/managed-by": "portail-operator",
-		})
+		WithLabels(baseLabels())
 }
 
 // ClusterRoleBindingName is the name of the shared ClusterRoleBinding for all data plane ServiceAccounts.
@@ -232,10 +299,7 @@ func BuildClusterRoleBinding(clusterRoleName string, subjects []rbacv1.Subject) 
 		subjectACs = append(subjectACs, sa)
 	}
 	return rbacv1ac.ClusterRoleBinding(ClusterRoleBindingName).
-		WithLabels(map[string]string{
-			"app.kubernetes.io/name":       "portail",
-			"app.kubernetes.io/managed-by": "portail-operator",
-		}).
+		WithLabels(baseLabels()).
 		WithRoleRef(rbacv1ac.RoleRef().
 			WithAPIGroup("rbac.authorization.k8s.io").
 			WithKind("ClusterRole").
@@ -263,7 +327,7 @@ func BuildPodDisruptionBudget(gateway *gatewayv1.Gateway) (*policyv1ac.PodDisrup
 }
 
 // BuildService creates the desired LoadBalancer Service for a Gateway.
-func BuildService(gateway *gatewayv1.Gateway, ports []DerivedPort) (*corev1ac.ServiceApplyConfiguration, error) {
+func BuildService(gateway *gatewayv1.Gateway, ports []DerivedPort, targets map[int32]int32) (*corev1ac.ServiceApplyConfiguration, error) {
 	name, err := resourceName(gateway.Name)
 	if err != nil {
 		return nil, err
@@ -275,10 +339,14 @@ func BuildService(gateway *gatewayv1.Gateway, ports []DerivedPort) (*corev1ac.Se
 
 	servicePorts := make([]*corev1ac.ServicePortApplyConfiguration, 0, len(ports))
 	for _, p := range ports {
+		tp := targets[p.Port]
+		if tp == 0 {
+			tp = p.Port
+		}
 		servicePorts = append(servicePorts, corev1ac.ServicePort().
 			WithName(p.Name).
 			WithPort(p.Port).
-			WithTargetPort(intstr.FromInt32(p.Port)).
+			WithTargetPort(intstr.FromInt32(tp)).
 			WithProtocol(p.Protocol))
 	}
 

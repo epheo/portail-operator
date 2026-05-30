@@ -4,5 +4,5 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 images:
 - name: controller
-  newName: quay.io/epheo/portail-operator
+  newName: ghcr.io/epheo/portail-operator
   newTag: 0.1.0

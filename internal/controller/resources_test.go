@@ -110,10 +110,63 @@ func TestDerivePortsUDP(t *testing.T) {
 	}
 }
 
+func TestAllocateTargetPorts(t *testing.T) {
+	dp := func(ps ...int32) []DerivedPort {
+		out := make([]DerivedPort, 0, len(ps))
+		for _, p := range ps {
+			out = append(out, DerivedPort{Port: p})
+		}
+		return out
+	}
+
+	t.Run("privileged draw from pool, unprivileged bind themselves", func(t *testing.T) {
+		got := allocateTargetPorts(dp(80, 443, 8080), nil)
+		if got[8080] != 8080 {
+			t.Errorf("expected 8080->8080, got %d", got[8080])
+		}
+		if got[80] <= privilegedPortMax || got[443] <= privilegedPortMax {
+			t.Errorf("expected unprivileged targets, got 80=%d 443=%d", got[80], got[443])
+		}
+		if got[80] == got[443] {
+			t.Errorf("expected distinct targets, got %d for both", got[80])
+		}
+	})
+
+	t.Run("pool avoids an unprivileged listener's port", func(t *testing.T) {
+		got := allocateTargetPorts(dp(80, 8080), nil)
+		if got[80] == 8080 {
+			t.Error("expected 80 not to collide with the 8080 listener")
+		}
+		if got[8080] != 8080 {
+			t.Errorf("expected 8080->8080, got %d", got[8080])
+		}
+	})
+
+	t.Run("existing assignments are preserved", func(t *testing.T) {
+		// Adding a lower port (70) must not move the existing 80/90 targets.
+		got := allocateTargetPorts(dp(70, 80, 90), map[int32]int32{80: 8000, 90: 8001})
+		if got[80] != 8000 || got[90] != 8001 {
+			t.Errorf("expected 80->8000, 90->8001 preserved, got 80=%d 90=%d", got[80], got[90])
+		}
+		if got[70] == 8000 || got[70] == 8001 || got[70] <= privilegedPortMax {
+			t.Errorf("expected 70 to get a fresh unprivileged target, got %d", got[70])
+		}
+	})
+
+	t.Run("deterministic regardless of listener order", func(t *testing.T) {
+		a := allocateTargetPorts(dp(80, 443, 22), nil)
+		b := allocateTargetPorts(dp(22, 443, 80), nil)
+		for _, p := range []int32{22, 80, 443} {
+			if a[p] != b[p] {
+				t.Errorf("non-deterministic for %d: %d vs %d", p, a[p], b[p])
+			}
+		}
+	})
+}
+
 func TestBuildDeployment(t *testing.T) {
 	gw := testGateway()
-	ports := DerivePorts(gw)
-	deploy, err := BuildDeployment(gw, ports, "ghcr.io/epheo/portail:latest", "portail.epheo.eu/gateway-controller", "portail-controller", 2, nil)
+	deploy, err := BuildDeployment(gw, "ghcr.io/epheo/portail:latest", "portail.epheo.eu/gateway-controller", "portail-controller", 2, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -152,11 +205,18 @@ func TestBuildDeployment(t *testing.T) {
 	if *c.Image != "ghcr.io/epheo/portail:latest" {
 		t.Errorf("expected image ghcr.io/epheo/portail:latest, got %s", *c.Image)
 	}
-	if len(c.Ports) != 2 {
-		t.Errorf("expected 2 container ports, got %d", len(c.Ports))
+	// Container ports are intentionally not declared (informational only) so listener
+	// changes don't churn the pod template.
+	if len(c.Ports) != 0 {
+		t.Errorf("expected no declared container ports, got %d", len(c.Ports))
 	}
 	if c.SecurityContext.Capabilities.Drop[0] != "ALL" {
 		t.Error("expected capabilities drop ALL")
+	}
+	// LoadBalancer mode (no networks): the data plane binds unprivileged target ports,
+	// so no NET_BIND_SERVICE is added.
+	if len(c.SecurityContext.Capabilities.Add) != 0 {
+		t.Errorf("expected no added capabilities in LoadBalancer mode, got %v", c.SecurityContext.Capabilities.Add)
 	}
 
 	// Check labels
@@ -168,7 +228,8 @@ func TestBuildDeployment(t *testing.T) {
 func TestBuildService(t *testing.T) {
 	gw := testGateway()
 	ports := DerivePorts(gw)
-	svc, err := BuildService(gw, ports)
+	targets := allocateTargetPorts(ports, nil)
+	svc, err := BuildService(gw, ports, targets)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -184,6 +245,10 @@ func TestBuildService(t *testing.T) {
 	}
 	if *svc.Spec.Ports[0].Port != 80 {
 		t.Errorf("expected port 80, got %d", *svc.Spec.Ports[0].Port)
+	}
+	// Privileged published port 80 is served on an unprivileged target port.
+	if tp := svc.Spec.Ports[0].TargetPort.IntValue(); int32(tp) <= privilegedPortMax {
+		t.Errorf("expected unprivileged targetPort for published 80, got %d", tp)
 	}
 	if svc.Spec.Selector["portail.epheo.eu/gateway"] != testGatewayName {
 		t.Error("missing gateway selector on service")
@@ -285,9 +350,8 @@ func TestBuildClusterRoleBinding(t *testing.T) {
 
 func TestBuildDeploymentMultiNetwork(t *testing.T) {
 	gw := testGateway()
-	ports := DerivePorts(gw)
 	networks := []string{"udn-frontend", "udn-backend"}
-	deploy, err := BuildDeployment(gw, ports, "ghcr.io/epheo/portail:latest", "portail.epheo.eu/gateway-controller", "portail-controller", 2, networks)
+	deploy, err := BuildDeployment(gw, "ghcr.io/epheo/portail:latest", "portail.epheo.eu/gateway-controller", "portail-controller", 2, networks)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -301,12 +365,17 @@ func TestBuildDeploymentMultiNetwork(t *testing.T) {
 	if ann["k8s.v1.cni.cncf.io/networks"] != expected {
 		t.Errorf("expected CNI annotation %q, got %q", expected, ann["k8s.v1.cni.cncf.io/networks"])
 	}
+
+	// Multi-network mode binds the published port directly, so NET_BIND_SERVICE is added.
+	add := deploy.Spec.Template.Spec.Containers[0].SecurityContext.Capabilities.Add
+	if len(add) != 1 || add[0] != "NET_BIND_SERVICE" {
+		t.Errorf("expected NET_BIND_SERVICE in multi-network mode, got %v", add)
+	}
 }
 
 func TestBuildDeploymentNoNetworks(t *testing.T) {
 	gw := testGateway()
-	ports := DerivePorts(gw)
-	deploy, err := BuildDeployment(gw, ports, "ghcr.io/epheo/portail:latest", "portail.epheo.eu/gateway-controller", "portail-controller", 2, nil)
+	deploy, err := BuildDeployment(gw, "ghcr.io/epheo/portail:latest", "portail.epheo.eu/gateway-controller", "portail-controller", 2, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -361,8 +430,7 @@ func TestBuildDeploymentInvalidGatewayName(t *testing.T) {
 			},
 		},
 	}
-	ports := DerivePorts(gw)
-	_, err := BuildDeployment(gw, ports, "image:latest", "controller", "sa", 1, nil)
+	_, err := BuildDeployment(gw, "image:latest", "controller", "sa", 1, nil)
 	if err == nil {
 		t.Error("expected error for invalid gateway name, got nil")
 	}
@@ -410,7 +478,7 @@ func TestBuildServiceInvalidGatewayName(t *testing.T) {
 		},
 	}
 	ports := DerivePorts(gw)
-	_, err := BuildService(gw, ports)
+	_, err := BuildService(gw, ports, nil)
 	if err == nil {
 		t.Error("expected error for invalid gateway name, got nil")
 	}

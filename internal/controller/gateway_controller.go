@@ -7,27 +7,23 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
-	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
-const gatewayFinalizer = "portail.epheo.eu/rbac-cleanup"
-
 // GatewayReconciler reconciles Gateway objects by managing Deployment and Service resources.
+// Cluster-wide data-plane RBAC is owned separately by DataPlaneRBACReconciler.
 type GatewayReconciler struct {
 	client.Client
 	Scheme             *runtime.Scheme
@@ -36,18 +32,15 @@ type GatewayReconciler struct {
 	Image              string
 	Replicas           int32
 	ServiceAccountName string
-	DataplaneRoleName  string
 }
 
-// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch;update
-// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways/finalizers,verbs=update
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 
 func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -62,37 +55,19 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	// Verify the GatewayClass is ours
-	var gc gatewayv1.GatewayClass
-	if err := r.Get(ctx, types.NamespacedName{Name: string(gateway.Spec.GatewayClassName)}, &gc); err != nil {
-		if apierrors.IsNotFound(err) {
-			logger.V(1).Info("GatewayClass not found, skipping", "gatewayClass", gateway.Spec.GatewayClassName)
-			return ctrl.Result{}, nil
-		}
+	managed, err := r.isManaged(ctx, &gateway)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if gc.Spec.ControllerName != gatewayv1.GatewayController(r.ControllerName) {
+	if !managed {
 		return ctrl.Result{}, nil
 	}
 
-	// Handle deletion: clean up cluster-scoped and namespace-scoped RBAC
+	// A Gateway being deleted needs no provisioning: its Deployment/Service/PDB are
+	// reclaimed by owner-reference garbage collection, and DataPlaneRBACReconciler
+	// prunes the shared RBAC when it observes the deletion. No finalizer required.
 	if !gateway.DeletionTimestamp.IsZero() {
-		if controllerutil.ContainsFinalizer(&gateway, gatewayFinalizer) {
-			if err := r.cleanupRBAC(ctx, &gateway); err != nil {
-				return ctrl.Result{}, fmt.Errorf("cleaning up RBAC: %w", err)
-			}
-			controllerutil.RemoveFinalizer(&gateway, gatewayFinalizer)
-			if err := r.Update(ctx, &gateway); err != nil {
-				return ctrl.Result{}, err
-			}
-		}
 		return ctrl.Result{}, nil
-	}
-
-	// Ensure finalizer is present
-	if controllerutil.AddFinalizer(&gateway, gatewayFinalizer) {
-		if err := r.Update(ctx, &gateway); err != nil {
-			return ctrl.Result{}, err
-		}
 	}
 
 	logger.Info("Reconciling Gateway", "gateway", gateway.Name, "namespace", gateway.Namespace)
@@ -101,50 +76,20 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	ports := DerivePorts(&gateway)
 	networks, err := ExtractNetworkNames(&gateway)
 	if err != nil {
-		r.Recorder.Eventf(&gateway, nil, corev1.EventTypeWarning, "InvalidNetwork", "InvalidNetwork", "Invalid network name: %v", err)
-		apimeta.SetStatusCondition(&gateway.Status.Conditions, metav1.Condition{
-			Type:               string(gatewayv1.GatewayConditionAccepted),
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: gateway.Generation,
-			LastTransitionTime: metav1.Now(),
-			Reason:             string(gatewayv1.GatewayReasonInvalidParameters),
-			Message:            err.Error(),
-		})
-		if statusErr := r.Status().Update(ctx, &gateway); statusErr != nil {
-			logger.Error(statusErr, "Failed to update Gateway status")
-		}
-		return ctrl.Result{}, nil
+		return r.failAccepted(ctx, &gateway, "InvalidNetwork", fmt.Sprintf("Invalid network name: %v", err), err.Error())
 	}
 
-	// Ensure ServiceAccount exists for the data plane
+	// Ensure the data plane ServiceAccount exists. Its cluster-wide RBAC (the shared
+	// ClusterRoleBinding) and orphan cleanup are owned by DataPlaneRBACReconciler.
 	desiredSA := BuildServiceAccount(gateway.Namespace, r.ServiceAccountName)
 	if err := r.Apply(ctx, desiredSA, client.FieldOwner("portail-operator"), client.ForceOwnership); err != nil {
 		r.Recorder.Eventf(&gateway, nil, corev1.EventTypeWarning, "ServiceAccountFailed", "ServiceAccountFailed", "Failed to apply ServiceAccount: %v", err)
 		return ctrl.Result{}, fmt.Errorf("applying ServiceAccount: %w", err)
 	}
 
-	// Reconcile the shared ClusterRoleBinding with subjects from all namespaces
-	if err := r.reconcileClusterRoleBinding(ctx, &gateway); err != nil {
-		r.Recorder.Eventf(&gateway, nil, corev1.EventTypeWarning, "ClusterRoleBindingFailed", "ClusterRoleBindingFailed", "Failed to reconcile ClusterRoleBinding: %v", err)
-		return ctrl.Result{}, fmt.Errorf("reconciling ClusterRoleBinding: %w", err)
-	}
-	r.Recorder.Eventf(&gateway, nil, corev1.EventTypeNormal, "RBACApplied", "RBACApplied", "RBAC applied for %q", r.ServiceAccountName)
-
-	desiredDeploy, err := BuildDeployment(&gateway, ports, r.Image, r.ControllerName, r.ServiceAccountName, r.Replicas, networks)
+	desiredDeploy, err := BuildDeployment(&gateway, r.Image, r.ControllerName, r.ServiceAccountName, r.Replicas, networks)
 	if err != nil {
-		r.Recorder.Eventf(&gateway, nil, corev1.EventTypeWarning, "InvalidGateway", "InvalidGateway", "Invalid gateway name: %v", err)
-		apimeta.SetStatusCondition(&gateway.Status.Conditions, metav1.Condition{
-			Type:               string(gatewayv1.GatewayConditionAccepted),
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: gateway.Generation,
-			LastTransitionTime: metav1.Now(),
-			Reason:             string(gatewayv1.GatewayReasonInvalidParameters),
-			Message:            err.Error(),
-		})
-		if statusErr := r.Status().Update(ctx, &gateway); statusErr != nil {
-			logger.Error(statusErr, "Failed to update Gateway status")
-		}
-		return ctrl.Result{}, nil
+		return r.failAccepted(ctx, &gateway, "InvalidGateway", fmt.Sprintf("Invalid gateway name: %v", err), err.Error())
 	}
 
 	// Apply Deployment via Server-Side Apply (both modes)
@@ -172,12 +117,14 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if err := r.deleteOrphanedService(ctx, &gateway); err != nil {
 			return ctrl.Result{}, fmt.Errorf("cleaning up orphaned Service: %w", err)
 		}
-		if err := r.updateGatewayStatusMultiNetwork(ctx, &gateway, desiredDeploy, networks); err != nil {
+		if err := r.patchStatus(ctx, &gateway, desiredDeploy, networkAddresses(networks)); err != nil {
 			return ctrl.Result{}, fmt.Errorf("updating Gateway status: %w", err)
 		}
 	} else {
-		// LoadBalancer mode
-		desiredService, err := BuildService(&gateway, ports)
+		// LoadBalancer mode. Allocate unprivileged target ports, preserving the live
+		// Service's existing assignments so unchanged listeners keep their bind port.
+		targets := allocateTargetPorts(ports, r.existingTargetPorts(ctx, &gateway))
+		desiredService, err := BuildService(&gateway, ports, targets)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("building Service: %w", err)
 		}
@@ -188,7 +135,8 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		r.Recorder.Eventf(&gateway, nil, corev1.EventTypeNormal, "ServiceApplied", "ServiceApplied", "Service %q applied (LoadBalancer)", *desiredService.Name)
 		logger.Info("Applied Service", "name", *desiredService.Name)
 
-		if err := r.updateGatewayStatus(ctx, &gateway, desiredDeploy, desiredService); err != nil {
+		addresses := r.loadBalancerAddresses(ctx, &gateway, *desiredService.Name, *desiredService.Namespace)
+		if err := r.patchStatus(ctx, &gateway, desiredDeploy, addresses); err != nil {
 			return ctrl.Result{}, fmt.Errorf("updating Gateway status: %w", err)
 		}
 	}
@@ -196,181 +144,100 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return ctrl.Result{}, nil
 }
 
-// reconcileClusterRoleBinding ensures a single shared ClusterRoleBinding exists
-// with subjects for all namespaces that have Gateways managed by this operator.
-func (r *GatewayReconciler) reconcileClusterRoleBinding(ctx context.Context, gateway *gatewayv1.Gateway) error {
-	subjects, err := r.collectSubjects(ctx)
+// existingTargetPorts returns the published->target port mapping from the Gateway's
+// current Service, if one exists. It lets the operator preserve target assignments
+// across reconciles so an unchanged listener keeps its (unprivileged) bind port.
+func (r *GatewayReconciler) existingTargetPorts(ctx context.Context, gateway *gatewayv1.Gateway) map[int32]int32 {
+	out := map[int32]int32{}
+	name, err := resourceName(gateway.Name)
 	if err != nil {
-		return err
+		return out
 	}
-
-	// Ensure current gateway's namespace is included
-	found := false
-	for _, s := range subjects {
-		if s.Namespace == gateway.Namespace {
-			found = true
-			break
+	var svc corev1.Service
+	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: gateway.Namespace}, &svc); err != nil {
+		return out
+	}
+	for _, p := range svc.Spec.Ports {
+		if tp := int32(p.TargetPort.IntValue()); tp != 0 {
+			out[p.Port] = tp
 		}
 	}
-	if !found {
-		subjects = append(subjects, rbacv1.Subject{
-			Kind:      "ServiceAccount",
-			Name:      r.ServiceAccountName,
-			Namespace: gateway.Namespace,
-		})
-	}
-
-	desired := BuildClusterRoleBinding(r.DataplaneRoleName, subjects)
-	return r.Apply(ctx, desired, client.FieldOwner("portail-operator"), client.ForceOwnership)
+	return out
 }
 
-// collectSubjects lists all Gateways managed by this operator and returns
-// deduplicated ServiceAccount subjects, one per namespace.
-func (r *GatewayReconciler) collectSubjects(ctx context.Context) ([]rbacv1.Subject, error) {
-	var gatewayList gatewayv1.GatewayList
-	if err := r.List(ctx, &gatewayList); err != nil {
-		return nil, err
+// isManaged reports whether the Gateway's GatewayClass is implemented by this
+// operator. A missing GatewayClass is treated as not-ours (no error).
+func (r *GatewayReconciler) isManaged(ctx context.Context, gw *gatewayv1.Gateway) (bool, error) {
+	var gc gatewayv1.GatewayClass
+	if err := r.Get(ctx, types.NamespacedName{Name: string(gw.Spec.GatewayClassName)}, &gc); err != nil {
+		if apierrors.IsNotFound(err) {
+			log.FromContext(ctx).V(1).Info("GatewayClass not found, skipping", "gatewayClass", gw.Spec.GatewayClassName)
+			return false, nil
+		}
+		return false, err
 	}
-
-	seenNS := make(map[string]bool)
-	var subjects []rbacv1.Subject
-
-	for i := range gatewayList.Items {
-		gw := &gatewayList.Items[i]
-		if gw.DeletionTimestamp != nil {
-			continue
-		}
-		// Verify this gateway belongs to our controller
-		var gc gatewayv1.GatewayClass
-		if err := r.Get(ctx, types.NamespacedName{Name: string(gw.Spec.GatewayClassName)}, &gc); err != nil {
-			continue
-		}
-		if gc.Spec.ControllerName != gatewayv1.GatewayController(r.ControllerName) {
-			continue
-		}
-		if !seenNS[gw.Namespace] {
-			seenNS[gw.Namespace] = true
-			subjects = append(subjects, rbacv1.Subject{
-				Kind:      "ServiceAccount",
-				Name:      r.ServiceAccountName,
-				Namespace: gw.Namespace,
-			})
-		}
-	}
-
-	return subjects, nil
+	return gc.Spec.ControllerName == gatewayv1.GatewayController(r.ControllerName), nil
 }
 
-// cleanupRBAC updates or removes the shared ClusterRoleBinding when a Gateway is deleted.
-func (r *GatewayReconciler) cleanupRBAC(ctx context.Context, deletingGateway *gatewayv1.Gateway) error {
-	logger := log.FromContext(ctx)
-
-	var gatewayList gatewayv1.GatewayList
-	if err := r.List(ctx, &gatewayList); err != nil {
-		return err
+// failAccepted records a warning event, marks the Gateway Accepted=False with the
+// InvalidParameters reason, and stops reconciliation without requeue: the spec must
+// change before progress is possible, so retrying as-is would only churn.
+func (r *GatewayReconciler) failAccepted(ctx context.Context, gateway *gatewayv1.Gateway, eventReason, eventMessage, condMessage string) (ctrl.Result, error) {
+	r.Recorder.Eventf(gateway, nil, corev1.EventTypeWarning, eventReason, eventReason, "%s", eventMessage)
+	apimeta.SetStatusCondition(&gateway.Status.Conditions, metav1.Condition{
+		Type:               string(gatewayv1.GatewayConditionAccepted),
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: gateway.Generation,
+		LastTransitionTime: metav1.Now(),
+		Reason:             string(gatewayv1.GatewayReasonInvalidParameters),
+		Message:            condMessage,
+	})
+	if err := r.Status().Update(ctx, gateway); err != nil {
+		log.FromContext(ctx).Error(err, "Failed to update Gateway status")
 	}
-
-	seenNS := make(map[string]bool)
-	var remainingSubjects []rbacv1.Subject
-
-	for i := range gatewayList.Items {
-		gw := &gatewayList.Items[i]
-		if gw.UID == deletingGateway.UID || gw.DeletionTimestamp != nil {
-			continue
-		}
-		var gc gatewayv1.GatewayClass
-		if err := r.Get(ctx, types.NamespacedName{Name: string(gw.Spec.GatewayClassName)}, &gc); err != nil {
-			continue
-		}
-		if gc.Spec.ControllerName != gatewayv1.GatewayController(r.ControllerName) {
-			continue
-		}
-		if !seenNS[gw.Namespace] {
-			seenNS[gw.Namespace] = true
-			remainingSubjects = append(remainingSubjects, rbacv1.Subject{
-				Kind:      "ServiceAccount",
-				Name:      r.ServiceAccountName,
-				Namespace: gw.Namespace,
-			})
-		}
-	}
-
-	// Clean up namespace-scoped resources if no remaining Gateways exist in this namespace.
-	// Treat permission errors as non-fatal: the SA is non-critical and will be cleaned up
-	// when the namespace is deleted. Blocking the finalizer on a permission error would
-	// leave the Gateway stuck in deletion.
-	if !seenNS[deletingGateway.Namespace] {
-		logger.Info("No remaining Gateways in namespace, cleaning up ServiceAccount",
-			"namespace", deletingGateway.Namespace)
-		sa := &corev1.ServiceAccount{}
-		sa.Name = r.ServiceAccountName
-		sa.Namespace = deletingGateway.Namespace
-		if err := client.IgnoreNotFound(r.Delete(ctx, sa)); err != nil {
-			if apierrors.IsForbidden(err) {
-				logger.Error(err, "Permission denied deleting ServiceAccount, skipping cleanup")
-			} else {
-				return err
-			}
-		}
-	}
-
-	if len(remainingSubjects) == 0 {
-		logger.Info("No remaining Gateways, deleting ClusterRoleBinding")
-		crb := &rbacv1.ClusterRoleBinding{}
-		crb.Name = ClusterRoleBindingName
-		if err := client.IgnoreNotFound(r.Delete(ctx, crb)); err != nil {
-			if apierrors.IsForbidden(err) {
-				logger.Error(err, "Permission denied deleting ClusterRoleBinding, skipping cleanup")
-			} else {
-				return err
-			}
-		}
-		return nil
-	}
-
-	desired := BuildClusterRoleBinding(r.DataplaneRoleName, remainingSubjects)
-	return r.Apply(ctx, desired, client.FieldOwner("portail-operator"), client.ForceOwnership)
+	return ctrl.Result{}, nil
 }
 
-func (r *GatewayReconciler) updateGatewayStatus(ctx context.Context, gateway *gatewayv1.Gateway, deploy *appsv1ac.DeploymentApplyConfiguration, svc *corev1ac.ServiceApplyConfiguration) error {
+// patchStatus sets the Accepted and Programmed conditions, assigns the supplied
+// status addresses, and patches the Gateway status. Address derivation differs by
+// mode (LoadBalancer ingress vs. attached network names) and is done by the caller.
+func (r *GatewayReconciler) patchStatus(ctx context.Context, gateway *gatewayv1.Gateway, deploy *appsv1ac.DeploymentApplyConfiguration, addresses []gatewayv1.GatewayStatusAddress) error {
 	patch := client.MergeFrom(gateway.DeepCopy())
-	now := metav1.Now()
 
 	apimeta.SetStatusCondition(&gateway.Status.Conditions, metav1.Condition{
 		Type:               string(gatewayv1.GatewayConditionAccepted),
 		Status:             metav1.ConditionTrue,
 		ObservedGeneration: gateway.Generation,
-		LastTransitionTime: now,
+		LastTransitionTime: metav1.Now(),
 		Reason:             string(gatewayv1.GatewayReasonAccepted),
 		Message:            "Gateway accepted by portail-operator",
 	})
+	apimeta.SetStatusCondition(&gateway.Status.Conditions, r.programmedCondition(ctx, gateway, deploy))
 
-	programmedCondition := r.programmedCondition(ctx, gateway, deploy)
-	apimeta.SetStatusCondition(&gateway.Status.Conditions, programmedCondition)
-
-	var currentSvc corev1.Service
-	if err := r.Get(ctx, types.NamespacedName{Name: *svc.Name, Namespace: *svc.Namespace}, &currentSvc); err == nil {
-		var addresses []gatewayv1.GatewayStatusAddress
-		for _, ingress := range currentSvc.Status.LoadBalancer.Ingress {
-			if ingress.IP != "" {
-				addrType := gatewayv1.IPAddressType
-				addresses = append(addresses, gatewayv1.GatewayStatusAddress{
-					Type:  &addrType,
-					Value: ingress.IP,
-				})
-			}
-			if ingress.Hostname != "" {
-				addrType := gatewayv1.HostnameAddressType
-				addresses = append(addresses, gatewayv1.GatewayStatusAddress{
-					Type:  &addrType,
-					Value: ingress.Hostname,
-				})
-			}
-		}
-		gateway.Status.Addresses = addresses
-	}
-
+	gateway.Status.Addresses = addresses
 	return r.Status().Patch(ctx, gateway, patch)
+}
+
+// loadBalancerAddresses maps a Service's LoadBalancer ingress to Gateway status
+// addresses. If the Service can't be read it returns the Gateway's current
+// addresses unchanged, so a transient read error doesn't clear published VIPs.
+func (r *GatewayReconciler) loadBalancerAddresses(ctx context.Context, gateway *gatewayv1.Gateway, name, namespace string) []gatewayv1.GatewayStatusAddress {
+	var svc corev1.Service
+	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, &svc); err != nil {
+		return gateway.Status.Addresses
+	}
+	var addresses []gatewayv1.GatewayStatusAddress
+	for _, ingress := range svc.Status.LoadBalancer.Ingress {
+		if ingress.IP != "" {
+			addrType := gatewayv1.IPAddressType
+			addresses = append(addresses, gatewayv1.GatewayStatusAddress{Type: &addrType, Value: ingress.IP})
+		}
+		if ingress.Hostname != "" {
+			addrType := gatewayv1.HostnameAddressType
+			addresses = append(addresses, gatewayv1.GatewayStatusAddress{Type: &addrType, Value: ingress.Hostname})
+		}
+	}
+	return addresses
 }
 
 func (r *GatewayReconciler) programmedCondition(ctx context.Context, gateway *gatewayv1.Gateway, deploy *appsv1ac.DeploymentApplyConfiguration) metav1.Condition {
@@ -433,33 +300,14 @@ func (r *GatewayReconciler) deleteOrphanedService(ctx context.Context, gateway *
 	return r.Delete(ctx, &svc)
 }
 
-func (r *GatewayReconciler) updateGatewayStatusMultiNetwork(ctx context.Context, gateway *gatewayv1.Gateway, deploy *appsv1ac.DeploymentApplyConfiguration, networks []string) error {
-	patch := client.MergeFrom(gateway.DeepCopy())
-	now := metav1.Now()
-
-	apimeta.SetStatusCondition(&gateway.Status.Conditions, metav1.Condition{
-		Type:               string(gatewayv1.GatewayConditionAccepted),
-		Status:             metav1.ConditionTrue,
-		ObservedGeneration: gateway.Generation,
-		LastTransitionTime: now,
-		Reason:             string(gatewayv1.GatewayReasonAccepted),
-		Message:            "Gateway accepted by portail-operator",
-	})
-
-	programmedCondition := r.programmedCondition(ctx, gateway, deploy)
-	apimeta.SetStatusCondition(&gateway.Status.Conditions, programmedCondition)
-
+// networkAddresses builds Gateway status addresses from multi-network names.
+func networkAddresses(networks []string) []gatewayv1.GatewayStatusAddress {
 	addresses := make([]gatewayv1.GatewayStatusAddress, 0, len(networks))
 	for _, net := range networks {
 		addrType := NetworkAddressType
-		addresses = append(addresses, gatewayv1.GatewayStatusAddress{
-			Type:  &addrType,
-			Value: net,
-		})
+		addresses = append(addresses, gatewayv1.GatewayStatusAddress{Type: &addrType, Value: net})
 	}
-	gateway.Status.Addresses = addresses
-
-	return r.Status().Patch(ctx, gateway, patch)
+	return addresses
 }
 
 func (r *GatewayReconciler) gatewayClassToGateways(ctx context.Context, obj client.Object) []reconcile.Request {
