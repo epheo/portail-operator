@@ -52,11 +52,8 @@ func (r *GatewayClassReconciler) EnsureDefaultGatewayClass(ctx context.Context) 
 
 	gc := &gatewayv1.GatewayClass{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: DefaultGatewayClassName,
-			Labels: map[string]string{
-				"app.kubernetes.io/name":       "portail",
-				"app.kubernetes.io/managed-by": "portail-operator",
-			},
+			Name:   DefaultGatewayClassName,
+			Labels: baseLabels(),
 		},
 		Spec: gatewayv1.GatewayClassSpec{
 			ControllerName: gatewayv1.GatewayController(r.ControllerName),

@@ -189,9 +189,22 @@ func main() {
 		Image:              cfg.image,
 		Replicas:           int32(cfg.replicas),
 		ServiceAccountName: cfg.serviceAccountName,
-		DataplaneRoleName:  cfg.dataplaneRoleName,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "Gateway")
+		os.Exit(1)
+	}
+
+	// DataPlaneRBACReconciler owns the shared data-plane ClusterRoleBinding and
+	// prunes orphaned ServiceAccounts; it watches Gateways/GatewayClasses and
+	// reconciles cluster-wide RBAC as a singleton.
+	if err := (&controller.DataPlaneRBACReconciler{
+		Client:             mgr.GetClient(),
+		Scheme:             mgr.GetScheme(),
+		ControllerName:     cfg.controllerName,
+		ServiceAccountName: cfg.serviceAccountName,
+		DataplaneRoleName:  cfg.dataplaneRoleName,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "DataPlaneRBAC")
 		os.Exit(1)
 	}
 

@@ -50,7 +50,6 @@ rules:
   - gateway.networking.k8s.io
   resources:
   - gatewayclasses/status
-  - gateways/finalizers
   verbs:
   - update
 - apiGroups:
@@ -60,7 +59,6 @@ rules:
   verbs:
   - get
   - list
-  - update
   - watch
 - apiGroups:
   - gateway.networking.k8s.io

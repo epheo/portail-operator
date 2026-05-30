@@ -1,4 +1,12 @@
 ---
+# dataplane-role grants the portail data plane the cluster-wide read access it needs
+# (Gateway API objects, route status, and the core/CNI resources it resolves backends
+# from). Unlike the operator's own role (config/rbac/role.yaml, generated from
+# +kubebuilder:rbac markers), this role is HAND-MAINTAINED — no marker generates it —
+# so keep it in sync with the permissions portail actually requires. The operator binds
+# it to per-namespace data-plane ServiceAccounts through the shared
+# portail-operator-dataplane-binding ClusterRoleBinding (see internal/controller,
+# GatewayReconciler.managedSubjects).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
