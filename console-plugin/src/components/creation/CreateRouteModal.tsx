@@ -107,7 +107,6 @@ export const CreateRouteModal: React.FC<CreateRouteModalProps> = ({
   const [customBackendKeys, setCustomBackendKeys] = useState<Set<string>>(new Set());
 
   const hasHostnames = routeType === 'http' || routeType === 'grpc' || routeType === 'tls';
-  const hasMatches = routeType === 'http' || routeType === 'grpc';
 
   const addHostname = () => {
     const h = hostnameInput.trim();

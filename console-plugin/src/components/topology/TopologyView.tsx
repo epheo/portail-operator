@@ -92,9 +92,8 @@ const GatewayRoutesSection: React.FC<{
   gatewayName: string;
   gatewayNamespace: string;
   graph: GraphModel;
-  serviceNames: string[];
   onAddRoute?: (gatewayName: string) => void;
-}> = ({ gatewayName, gatewayNamespace, graph, serviceNames, onAddRoute }) => {
+}> = ({ gatewayName, gatewayNamespace, graph, onAddRoute }) => {
   const [deletingRoute, setDeletingRoute] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -214,8 +213,7 @@ const GatewayPanelContent: React.FC<{
   edge: TopologyEdge;
   graph: GraphModel;
   onAddRoute?: (gatewayName: string) => void;
-  serviceNames?: string[];
-}> = ({ edge, graph, onAddRoute, serviceNames = [] }) => {
+}> = ({ edge, graph, onAddRoute }) => {
   const data = edge.data as GatewayEdgeData;
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editListener, setEditListener] = useState<ListenerInfo>({ name: '', protocol: 'HTTP', port: 80 });
@@ -448,7 +446,6 @@ const GatewayPanelContent: React.FC<{
         gatewayName={data.gatewayName}
         gatewayNamespace={data.gatewayNamespace}
         graph={graph}
-        serviceNames={serviceNames}
         onAddRoute={onAddRoute}
       />
 
@@ -1057,7 +1054,7 @@ const TopologyContent: React.FC<TopologyViewProps> = ({ graph, onAddRoute, servi
     const edge = graph.edges.find((e) => e.id === selectedId);
     if (edge) {
       panelTitle = (edge.data as GatewayEdgeData).gatewayName;
-      panelContent = <GatewayPanelContent edge={edge} graph={graph} onAddRoute={onAddRoute} serviceNames={serviceNames} />;
+      panelContent = <GatewayPanelContent edge={edge} graph={graph} onAddRoute={onAddRoute} />;
     }
   } else if (selectedId && selectedType === 'route') {
     const node = graph.nodes.find((n) => n.id === selectedId);
