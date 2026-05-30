@@ -1,8 +1,12 @@
 # Image URL to use all building/pushing image targets
-IMG ?= quay.io/epheo/portail-operator:latest
+IMG ?= ghcr.io/epheo/portail-operator:latest
 
 # OLM bundle variables
-BUNDLE_IMG ?= quay.io/epheo/portail-operator-bundle:latest
+BUNDLE_IMG ?= ghcr.io/epheo/portail-operator-bundle:latest
+# Data-plane image pinned into the generated bundle CSV (the operator -> data-plane
+# compatibility declaration). Deliberately kept off config/manager/manager.yaml,
+# which stays :latest so conformance can inject a locally-built data-plane image.
+DATAPLANE_IMG ?= ghcr.io/epheo/portail:0.1.11
 VERSION ?= 0.1.0
 CHANNELS ?= alpha
 BUNDLE_DEFAULT_CHANNEL ?= alpha
@@ -154,7 +158,7 @@ bundle: manifests kustomize ## Generate OLM bundle manifests and metadata.
 		icon_b64=$$(base64 -w0 "$(BUNDLE_ICON)"); \
 		yq -i ".spec.icon[0].base64data = \"$$icon_b64\"" bundle/manifests/portail-operator.clusterserviceversion.yaml; \
 	fi
-	operator-sdk bundle validate ./bundle
+	yq -i '(.spec.install.spec.deployments[].spec.template.spec.containers[].args[] | select(test("^--image="))) = "--image=$(DATAPLANE_IMG)"' bundle/manifests/portail-operator.clusterserviceversion.yaml
 	operator-sdk bundle validate ./bundle
 
 .PHONY: bundle-build
@@ -167,7 +171,7 @@ bundle-push: ## Push the OLM bundle image.
 
 ##@ Console Plugin
 
-CONSOLE_PLUGIN_IMG ?= quay.io/epheo/portail-console-plugin:latest
+CONSOLE_PLUGIN_IMG ?= ghcr.io/epheo/portail-console-plugin:latest
 
 
 .PHONY: console-plugin-install

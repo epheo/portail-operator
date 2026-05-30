@@ -5,7 +5,7 @@ metadata:
     alm-examples: '[]'
     capabilities: Basic Install
     console.openshift.io/plugins: '["portail-console-plugin"]'
-    createdAt: "2026-04-01T14:36:27Z"
+    createdAt: "2026-05-30T09:11:20Z"
     operators.operatorframework.io/builder: operator-sdk-v1.42.2
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
   name: portail-operator.v0.1.0
@@ -96,7 +96,6 @@ spec:
                 - gateway.networking.k8s.io
               resources:
                 - gatewayclasses/status
-                - gateways/finalizers
               verbs:
                 - update
             - apiGroups:
@@ -106,7 +105,6 @@ spec:
               verbs:
                 - get
                 - list
-                - update
                 - watch
             - apiGroups:
                 - gateway.networking.k8s.io
@@ -171,7 +169,7 @@ spec:
                   app.kubernetes.io/part-of: portail-operator
               spec:
                 containers:
-                  - image: quay.io/epheo/portail-console-plugin:latest
+                  - image: ghcr.io/epheo/portail-console-plugin:0.1.0
                     name: console-plugin
                     ports:
                       - containerPort: 9443
@@ -194,6 +192,7 @@ spec:
                       - mountPath: /var/serving-cert
                         name: serving-cert
                         readOnly: true
+                    args: []
                 securityContext:
                   runAsNonRoot: true
                   seccompProfile:
@@ -228,12 +227,12 @@ spec:
                       - --leader-elect
                       - --health-probe-bind-address=:8081
                       - --controller-name=portail.epheo.eu/gateway-controller
-                      - --image=ghcr.io/epheo/portail:latest
+                      - --image=ghcr.io/epheo/portail:0.1.11
                       - --default-replicas=2
                       - --service-account-name=portail-controller
                     command:
                       - /manager
-                    image: quay.io/epheo/portail-operator:0.1.0
+                    image: ghcr.io/epheo/portail-operator:0.1.0
                     imagePullPolicy: IfNotPresent
                     livenessProbe:
                       httpGet:

@@ -2,3 +2,6 @@ resources:
 - bases/portail-operator.clusterserviceversion.yaml
 - ../default
 - ../console-plugin
+images:
+- name: ghcr.io/epheo/portail-console-plugin
+  newTag: 0.1.0

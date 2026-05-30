@@ -23,7 +23,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: console-plugin
-          image: quay.io/epheo/portail-console-plugin:latest
+          image: ghcr.io/epheo/portail-console-plugin:latest
           ports:
             - containerPort: 9443
               protocol: TCP
