@@ -46,7 +46,6 @@ rules:
   resources:
   - namespaces
   - services
-  - endpoints
   # Secrets are granted cluster-wide because the data plane uses a cluster-scoped
   # watch for TLS certificates, and the Gateway API spec supports cross-namespace
   # certificateRefs via ReferenceGrant. Scoping to per-namespace requires the data
@@ -68,7 +67,10 @@ rules:
   - discovery.k8s.io
   resources:
   - endpointslices
+  # get/list only (NO watch): a one-shot, label-filtered read so the data plane
+  # can resolve a headless Service's NAMED targetPort to its numeric value.
+  # Deliberately not a watch — backend pod churn is discovered via DNS
+  # (STRICT_DNS), so no cluster-wide EndpointSlice informer is opened.
   verbs:
   - get
   - list
-  - watch

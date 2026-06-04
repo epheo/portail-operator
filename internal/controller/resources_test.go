@@ -483,3 +483,67 @@ func TestBuildServiceInvalidGatewayName(t *testing.T) {
 		t.Error("expected error for invalid gateway name, got nil")
 	}
 }
+
+func allowedFrom(f gatewayv1.FromNamespaces) *gatewayv1.AllowedRoutes {
+	return &gatewayv1.AllowedRoutes{Namespaces: &gatewayv1.RouteNamespaces{From: &f}}
+}
+
+func TestComputeWatchShape(t *testing.T) {
+	certs := []gatewayv1.SecretObjectReference{{Name: gatewayv1.ObjectName("cert")}}
+	tests := []struct {
+		name      string
+		listeners []gatewayv1.Listener
+		want      string
+	}{
+		{
+			name:      "http only -> no gate-able extras",
+			listeners: []gatewayv1.Listener{{Name: "http", Port: 80, Protocol: gatewayv1.HTTPProtocolType}},
+			want:      "",
+		},
+		{
+			name: "https terminate, Same",
+			listeners: []gatewayv1.Listener{{
+				Name: "https", Port: 443, Protocol: gatewayv1.HTTPSProtocolType,
+				TLS: &gatewayv1.ListenerTLSConfig{CertificateRefs: certs},
+			}},
+			want: "tls",
+		},
+		{
+			name:      "udp only -> no gate-able extras",
+			listeners: []gatewayv1.Listener{{Name: "dns", Port: 5300, Protocol: gatewayv1.UDPProtocolType}},
+			want:      "",
+		},
+		{
+			name: "allowedRoutes All -> cluster-wide routes, no extras",
+			listeners: []gatewayv1.Listener{{
+				Name: "http", Port: 80, Protocol: gatewayv1.HTTPProtocolType,
+				AllowedRoutes: allowedFrom(gatewayv1.NamespacesFromAll),
+			}},
+			want: "",
+		},
+		{
+			name: "allowedRoutes Selector -> ns-labels",
+			listeners: []gatewayv1.Listener{{
+				Name: "http", Port: 80, Protocol: gatewayv1.HTTPProtocolType,
+				AllowedRoutes: allowedFrom(gatewayv1.NamespacesFromSelector),
+			}},
+			want: "ns-labels",
+		},
+		{
+			name: "mixed tcp + tls listeners, Same",
+			listeners: []gatewayv1.Listener{
+				{Name: "tcp", Port: 9000, Protocol: gatewayv1.TCPProtocolType},
+				{Name: "tls", Port: 8443, Protocol: gatewayv1.TLSProtocolType, TLS: &gatewayv1.ListenerTLSConfig{CertificateRefs: certs}},
+			},
+			want: "tls",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gw := &gatewayv1.Gateway{Spec: gatewayv1.GatewaySpec{Listeners: tt.listeners}}
+			if got := computeWatchShape(gw); got != tt.want {
+				t.Errorf("computeWatchShape() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
