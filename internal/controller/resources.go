@@ -8,6 +8,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/validation"
 	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
@@ -192,6 +193,45 @@ func ownerReference(gateway *gatewayv1.Gateway) *metav1ac.OwnerReferenceApplyCon
 		WithBlockOwnerDeletion(true)
 }
 
+// computeWatchShape derives the data plane's --watch-shape token set from the
+// Gateway's listeners, so a single-Gateway pod skips the cluster-wide watches it
+// can never use. Only resources that never parentRef a Gateway may be gated:
+//   - tls        a listener terminates TLS (has certificateRefs) → watch tls Secrets
+//   - ns-labels  a listener uses allowedRoutes: Selector → watch Namespace labels
+//
+// Route watches (HTTP/TCP/TLS/UDP) are NOT gated: a route in any namespace, of
+// any kind, may parentRef this Gateway and must get a status (attached, or
+// rejected with NotAllowedByListeners / NoMatchingParent) even when it cannot
+// attach — so the data plane must observe all of them.
+//
+// Recomputed on every reconcile and stamped into the pod template, so a listener
+// change rolls the pod and the data plane re-derives its watch set (the template
+// is otherwise listener-independent and would not restart).
+func computeWatchShape(gateway *gatewayv1.Gateway) string {
+	var needsTLS, anySelector bool
+	for _, l := range gateway.Spec.Listeners {
+		if l.TLS != nil && len(l.TLS.CertificateRefs) > 0 {
+			needsTLS = true
+		}
+		// allowedRoutes defaults to {namespaces: {from: Same}} when unset.
+		from := gatewayv1.NamespacesFromSame
+		if l.AllowedRoutes != nil && l.AllowedRoutes.Namespaces != nil && l.AllowedRoutes.Namespaces.From != nil {
+			from = *l.AllowedRoutes.Namespaces.From
+		}
+		if from == gatewayv1.NamespacesFromSelector {
+			anySelector = true
+		}
+	}
+	var tokens []string
+	if needsTLS {
+		tokens = append(tokens, "tls")
+	}
+	if anySelector {
+		tokens = append(tokens, "ns-labels")
+	}
+	return strings.Join(tokens, ",")
+}
+
 // BuildDeployment creates the desired Deployment for a Gateway.
 // When networks is non-empty, the pod template is annotated with k8s.v1.cni.cncf.io/networks
 // for multi-network attachment.
@@ -235,7 +275,19 @@ func BuildDeployment(gateway *gatewayv1.Gateway, image, controllerName, serviceA
 			// provisions one Deployment per Gateway, so each pod
 			// only needs to reconcile its own.
 			"--gateway", fmt.Sprintf("%s/%s", gateway.Namespace, gateway.Name),
+			// Narrow the pod's secondary watches to what this Gateway's
+			// listeners actually need, so N pods don't each watch the whole
+			// cluster. Stamped into the template so a listener change rolls
+			// the pod and the watch set is re-derived.
+			"--watch-shape", computeWatchShape(gateway),
 		).
+		// Size the data plane's Tokio runtime to the pod, not the node. Without
+		// this the runtime sizes its worker threads to the node's CPU count, so
+		// co-locating many per-Gateway pods exhausts the node's PID/thread budget
+		// (before CPU/memory) and containerd starts failing to fork.
+		WithEnv(corev1ac.EnvVar().
+			WithName("PORTAIL_WORKER_THREADS").
+			WithValue("2")).
 		WithReadinessProbe(corev1ac.Probe().
 			WithHTTPGet(corev1ac.HTTPGetAction().
 				WithPath("/readyz").
@@ -243,6 +295,27 @@ func BuildDeployment(gateway *gatewayv1.Gateway, image, controllerName, serviceA
 			WithInitialDelaySeconds(2).
 			WithPeriodSeconds(5).
 			WithFailureThreshold(6)).
+		// Startup probe polls every 1s so the pod is marked Ready within ~1s of
+		// the data plane binding its ports, instead of waiting up to a full 5s
+		// readiness period — shaves ~4s off every cold-start. The readiness probe
+		// keeps its calmer 5s period for steady-state flap detection.
+		WithStartupProbe(corev1ac.Probe().
+			WithHTTPGet(corev1ac.HTTPGetAction().
+				WithPath("/readyz").
+				WithPort(intstr.FromInt32(readinessDataPlanePort))).
+			WithPeriodSeconds(1).
+			WithFailureThreshold(30)).
+		// Bound the per-Gateway data plane so the scheduler can bin-pack and the
+		// runtime stays within its allocation. Sane defaults; tune per workload.
+		WithResources(corev1ac.ResourceRequirements().
+			WithRequests(corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("100m"),
+				corev1.ResourceMemory: resource.MustParse("64Mi"),
+			}).
+			WithLimits(corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("2"),
+				corev1.ResourceMemory: resource.MustParse("256Mi"),
+			})).
 		WithSecurityContext(corev1ac.SecurityContext().
 			WithAllowPrivilegeEscalation(false).
 			WithReadOnlyRootFilesystem(true).
