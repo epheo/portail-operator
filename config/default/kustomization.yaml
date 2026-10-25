@@ -14,8 +14,6 @@ resources:
 - metrics_service.yaml
 # [PROMETHEUS] Uncomment to add a ServiceMonitor that scrapes the controller metrics.
 #- ../prometheus
-# [CONSOLE PLUGIN] Uncomment to deploy the OpenShift console topology plugin with the operator.
-#- ../../console-plugin/deploy
 # [NETWORK POLICY] Uncomment to restrict access to the /metrics endpoint with a NetworkPolicy.
 #- ../network-policy
 
