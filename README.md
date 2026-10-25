@@ -20,7 +20,6 @@ Cluster-scoped RBAC is reconciled by a singleton controller that maintains one s
 - **Per-Gateway data plane** — each Gateway gets its own isolated deployment.
 - **Multi-network** — attach a Gateway to additional cluster networks via the `portail.epheo.eu/Network` address type (Multus CNI).
 - **Restricted-PSS compliant** — runs non-root with a read-only root filesystem and all capabilities dropped; privileged listener ports are mapped to unprivileged target ports.
-- **OpenShift console plugin** — network topology view with Gateway and route management.
 
 ## Getting started
 
@@ -68,15 +67,6 @@ The manager accepts the following flags, set on the operator Deployment:
 | `--default-replicas` | `2` | Replicas for each managed data-plane Deployment. |
 | `--leader-elect` | `false` | Enable leader election for high availability. |
 | `--metrics-bind-address` | `0` | Metrics endpoint address (`0` disables it). |
-
-## Console plugin
-
-An OpenShift console plugin under [`console-plugin/`](console-plugin/) adds a network topology view. Build, publish, and deploy it with:
-
-```sh
-make console-plugin-image-build console-plugin-image-push CONSOLE_PLUGIN_IMG=<registry>/portail-console-plugin:tag
-make console-plugin-deploy
-```
 
 ## Distribution
 
